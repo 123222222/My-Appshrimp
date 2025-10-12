@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "1009894224323",
+    "project_id": "my-app-shrimp-v2-0",
+    "storage_bucket": "my-app-shrimp-v2-0.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1009894224323:android:acb9da1f1dc0d3d3dd0d76",
+        "android_client_info": {
+          "package_name": "com.dung.myapplication"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "1009894224323-kd34t0ij715hn2i465kp2upatulgutot.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.dung.myapplication",
+            "certificate_hash": "abba30f9aad92a4871054c594c9bcfb5051449b8"
+          }
+        },
+        {
+          "client_id": "1009894224323-2s47lcv7nla2mtef7qo6l76ld0dcn6go.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAFxyPDcf_0LM2vz46CYp4PacI-pWAGOGs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "1009894224323-2s47lcv7nla2mtef7qo6l76ld0dcn6go.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
