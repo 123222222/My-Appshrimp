@@ -10,7 +10,9 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.net.InetAddress
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 
 @HiltViewModel
@@ -20,36 +22,58 @@ class HomeScreenViewModel @Inject constructor() : ViewModel() {
     val scanStatus = mutableStateOf("")
     private val TAG = "IPScan"
 
-    fun startScan() {
+    // ✅ URL ngrok của bạn
+    private val NGROK_URL = "unstrengthening-elizabeth-nondispensible.ngrok-free.dev"
+
+    // OkHttp client dùng cho probe HTTP
+    private val httpClient = OkHttpClient.Builder()
+        .connectTimeout(2000, TimeUnit.MILLISECONDS)
+        .callTimeout(3000, TimeUnit.MILLISECONDS)
+        .readTimeout(2000, TimeUnit.MILLISECONDS)
+        .build()
+
+
+    init {
+        Log.d("debug","hello ne bé")
+    }
+
+    // ➕ Hàm add ngrok device
+    fun addNgrokDevice() {
         viewModelScope.launch {
-            val subnet = "192.168.111" // ⚙️ chỉnh subnet nếu cần
             deviceList.clear()
-            scanStatus.value = "Scanning subnet $subnet ..."
-            Log.d(TAG, scanStatus.value)
+            scanStatus.value = "Connecting to camera server..."
 
             withContext(Dispatchers.IO) {
-                for (i in 1..255) {
-                    val host = "$subnet.$i"
-                    try {
-                        val address = InetAddress.getByName(host)
-                        if (address.isReachable(100)) {
-                            Log.d(TAG, "Found: $host - ${address.hostName}")
+                val url = "https://$NGROK_URL/blynk_feed"
+                val request = Request.Builder()
+                    .url(url)
+                    .get()
+                    .build()
+
+                try {
+                    httpClient.newCall(request).execute().use { resp ->
+                        if (resp.isSuccessful || resp.code == 401) {
                             withContext(Dispatchers.Main) {
                                 deviceList.add(
                                     IpDevice(
-                                        name = address.hostName ?: "Unknown Device",
-                                        ipAddress = host
+                                        name = "Camera Server (Internet)",
+                                        ipAddress = NGROK_URL
                                     )
                                 )
+                                scanStatus.value = "Camera server ready"
+                            }
+                        } else {
+                            withContext(Dispatchers.Main) {
+                                scanStatus.value = "Server not responding (${resp.code})"
                             }
                         }
-                    } catch (_: Exception) {}
+                    }
+                } catch (e: Exception) {
+                    withContext(Dispatchers.Main) {
+                        scanStatus.value = "Cannot connect: ${e.message}"
+                    }
                 }
             }
-
-            val message = "Scan finished, found ${deviceList.size} devices"
-            scanStatus.value = message
-            Log.d(TAG, message)
         }
     }
 }

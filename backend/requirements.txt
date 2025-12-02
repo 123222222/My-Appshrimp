@@ -1,0 +1,11 @@
+# Main requirements for Shrimp Detection Backend
+flask
+flask-cors
+cloudinary
+pymongo
+python-dotenv
+opencv-python
+Pillow
+tflite-runtime
+firebase-admin
+

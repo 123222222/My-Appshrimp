@@ -1,15 +1,101 @@
-*.iml
+# Gradle files
 .gradle
-/local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
-.DS_Store
-/build
-/captures
-.externalNativeBuild
-.cxx
+build/
+gradle-wrapper.jar
+*.class
+
+# Local configuration file (sdk path, etc)
 local.properties
+
+# Android Studio generated files and folders
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+output.json
+*.ap_
+*.dex
+
+# IntelliJ
+*.iml
+.idea/
+misc.xml
+deploymentTargetDropDown.xml
+render.experimental.xml
+
+# Keystore files
+*.jks
+*.keystore
+
+# Google Services (API keys)
+google-services.json
+
+# Version control
+vcs.xml
+
+# Build outputs
+app/build/
+backend/__pycache__/
+*.pyc
+*.pyo
+
+# Python virtual environment
+venv/
+env/
+ENV/
+
+# Environment variables
+.env
+*.env
+backend/.env
+
+# Firebase credentials
+firebase-admin.json
+
+# Device bindings and permissions
+permitted_devices.json
+permitted_emails.json
+
+# Logs
+*.log
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Compiled files
+*.o
+*.so
+*.dll
+*.exe
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*~
+
+# Node modules (if any)
+node_modules/
+
+# Build artifacts
+app/build/generated/
+app/build/intermediates/
+app/build/outputs/
+app/build/tmp/
+app/build/kotlin/
+app/build/kspCaches/
+
+# Reports
+build/reports/
+

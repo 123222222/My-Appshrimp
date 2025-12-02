@@ -1,6 +1,7 @@
 package com.dung.myapplication.login
 
 import android.content.Intent
+import android.content.SharedPreferences
 import android.os.Bundle
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
@@ -61,9 +62,20 @@ class LoginActivity : AppCompatActivity() {
             object : BiometricPrompt.AuthenticationCallback() {
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                     super.onAuthenticationSucceeded(result)
-                    Toast.makeText(applicationContext, "Đăng nhập vân tay thành công", Toast.LENGTH_SHORT).show()
-                    startActivity(Intent(this@LoginActivity, MainActivity::class.java))
-                    finish()
+                    val user = auth.currentUser
+                    if (user != null) {
+                        user.getIdToken(true).addOnCompleteListener { tokenTask ->
+                            if (tokenTask.isSuccessful) {
+                                val idToken = tokenTask.result?.token
+                                if (idToken != null) saveIdTokenToPrefs(idToken)
+                            }
+                            Toast.makeText(applicationContext, "Đăng nhập vân tay thành công", Toast.LENGTH_SHORT).show()
+                            startActivity(Intent(this@LoginActivity, MainActivity::class.java))
+                            finish()
+                        }
+                    } else {
+                        Toast.makeText(applicationContext, "Vui lòng đăng nhập trước khi dùng vân tay", Toast.LENGTH_SHORT).show()
+                    }
                 }
 
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
@@ -107,9 +119,15 @@ class LoginActivity : AppCompatActivity() {
             auth.signInWithEmailAndPassword(email, password)
                 .addOnCompleteListener { task ->
                     if (task.isSuccessful) {
-                        Toast.makeText(this, "Đăng nhập thành công!", Toast.LENGTH_SHORT).show()
-                        startActivity(Intent(this, MainActivity::class.java))
-                        finish()
+                        auth.currentUser?.getIdToken(true)?.addOnCompleteListener { tokenTask ->
+                            if (tokenTask.isSuccessful) {
+                                val idToken = tokenTask.result?.token
+                                if (idToken != null) saveIdTokenToPrefs(idToken)
+                            }
+                            Toast.makeText(this, "Đăng nhập thành công!", Toast.LENGTH_SHORT).show()
+                            startActivity(Intent(this, MainActivity::class.java))
+                            finish()
+                        }
                     } else {
                         Toast.makeText(this, "Đăng nhập thất bại: ${task.exception?.message}", Toast.LENGTH_LONG).show()
                     }
@@ -135,6 +153,12 @@ class LoginActivity : AppCompatActivity() {
         }
     }
 
+    private fun saveIdTokenToPrefs(idToken: String) {
+        val prefs = getSharedPreferences("auth", MODE_PRIVATE)
+        prefs.edit().putString("idToken", idToken).apply()
+    }
+
+    // Google Sign-In
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == RC_SIGN_IN) {
@@ -145,9 +169,15 @@ class LoginActivity : AppCompatActivity() {
                 auth.signInWithCredential(credential)
                     .addOnCompleteListener { signInTask ->
                         if (signInTask.isSuccessful) {
-                            Toast.makeText(this, "Đăng nhập Google thành công: ${account.email}", Toast.LENGTH_LONG).show()
-                            startActivity(Intent(this, MainActivity::class.java))
-                            finish()
+                            auth.currentUser?.getIdToken(true)?.addOnCompleteListener { tokenTask ->
+                                if (tokenTask.isSuccessful) {
+                                    val idToken = tokenTask.result?.token
+                                    if (idToken != null) saveIdTokenToPrefs(idToken)
+                                }
+                                Toast.makeText(this, "Đăng nhập Google thành công: ${account.email}", Toast.LENGTH_LONG).show()
+                                startActivity(Intent(this, MainActivity::class.java))
+                                finish()
+                            }
                         } else {
                             Toast.makeText(this, "Đăng nhập Google thất bại", Toast.LENGTH_SHORT).show()
                         }
