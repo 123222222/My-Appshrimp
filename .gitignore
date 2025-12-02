@@ -74,6 +74,15 @@ Thumbs.db
 *.dll
 *.exe
 
+# Batch scripts (local tools)
+setup_git_and_push.bat
+START_HERE.bat
+fix_and_push.bat
+cleanup_md_files.bat
+
+# Git commands reference
+GIT_COMMANDS.txt
+
 # Database files
 *.db
 *.sqlite
