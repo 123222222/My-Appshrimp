@@ -127,13 +127,14 @@ def requires_auth(f):
     return decorated
 
 # Khởi tạo Firebase Admin SDK
-FIREBASE_CRED_PATH = os.getenv('FIREBASE_CRED_PATH', 'firebase-admin.json')
+FIREBASE_CRED_PATH = os.getenv('FIREBASE_CRED_PATH', 'my-app-shrimp-v2-0-firebase-adminsdk-fbsvc-4472454b6f.json')
 if os.path.exists(FIREBASE_CRED_PATH):
     cred = credentials.Certificate(FIREBASE_CRED_PATH)
     initialize_app(cred)
     print('✅ Firebase Admin SDK initialized!')
 else:
     print('⚠️  Firebase Admin SDK credential file not found!')
+    print(f'Looking for: {FIREBASE_CRED_PATH}')
 
 # Danh sách email được phép truy cập (admin + user được cấp quyền)
 PERMITTED_EMAILS_PATH = 'permitted_emails.json'
