@@ -137,8 +137,12 @@ dependencies {
     // Google Sign-In & Firebase Authentication & vân tay
     implementation("com.google.android.gms:play-services-auth:21.2.0")
     implementation("com.google.firebase:firebase-auth:22.3.1")
+    implementation("com.google.firebase:firebase-firestore:24.10.0")
     implementation("androidx.biometric:biometric:1.1.0")
 
     // Coroutines support for Firebase/Play Services (provides .await())
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.3")
+
+    // Gson for JSON serialization
+    implementation("com.google.code.gson:gson:2.10.1")
 }

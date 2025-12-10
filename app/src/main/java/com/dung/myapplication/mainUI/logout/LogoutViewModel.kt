@@ -1,55 +1,45 @@
 package com.dung.myapplication.mainUI.logout
 
+import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import com.google.firebase.auth.FirebaseAuth
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import com.dung.myapplication.models.User
-import com.dung.myapplication.R
+import com.dung.myapplication.utils.UserSession
 
 @HiltViewModel
-class LogoutViewModel @Inject constructor() : ViewModel() {
+class LogoutViewModel @Inject constructor(
+    @param:ApplicationContext private val context: Context
+) : ViewModel() {
     private val auth = FirebaseAuth.getInstance()
 
     fun logout() {
+        // Đăng xuất Firebase Auth
         auth.signOut()
+
+        // Xóa toàn bộ session qua UserSession
+        UserSession.clearSession(context)
     }
 
-    // Make users reactive and allow setting them from NavGraph (copy from ProfileViewModel)
-    private var _users by mutableStateOf(
-        listOf(
-            User(
-                id = "1",
-                username = "dungho",
-                fullName = "Ho Ngoc Dung",
-                email = "dungho@example.com",
-                phone = "0123456789",
-                avatarResId = R.drawable.avatar, // ✅ dùng avatarResId
-                bio = "Embedded systems & Kotlin dev, yêu thích STM32 + Compose Multiplatform!"
-            ),
-            User(
-                id = "2",
-                username = "johndoe",
-                fullName = "John Doe",
-                email = "john@example.com",
-                phone = "0987654321",
-                avatarResId = R.drawable.avatar2, // ✅ ảnh thứ hai
-                bio = "Mobile developer, thích Compose + Clean Architecture."
-            )
-        )
-    )
+    // Get current user from session
+    val currentUser: User? get() = UserSession.getCurrentUser(context)
 
-    // Expose immutable view
+    // Check if admin
+    val isAdmin: Boolean get() = UserSession.isAdmin(context)
+
+    // Make users reactive - show current logged in user
     val users: List<User>
-        get() = _users
-
-    // Allow NavGraph (or other callers) to set users from ProfileViewModel
-    fun setUsers(fromProfile: List<User>) {
-        if (fromProfile.isNotEmpty()) {
-            _users = fromProfile
+        get() {
+            val user = currentUser
+            return if (user != null) {
+                listOf(user)
+            } else {
+                emptyList()
+            }
         }
-    }
 }

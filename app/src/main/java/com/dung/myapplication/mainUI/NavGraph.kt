@@ -85,11 +85,8 @@ fun NavGraph(
         // 🚪 Logout
         composable<Logout> {
             val context = LocalContext.current
-            val profileViewModel = androidx.hilt.navigation.compose.hiltViewModel<ProfileViewModel>()
             val logoutViewModel = androidx.hilt.navigation.compose.hiltViewModel<LogoutViewModel>()
 
-            // Transfer profile users into logout viewmodel (so logout shows the same user data)
-            logoutViewModel.setUsers(profileViewModel.users)
 
             LogoutScreen(
                 context = context,

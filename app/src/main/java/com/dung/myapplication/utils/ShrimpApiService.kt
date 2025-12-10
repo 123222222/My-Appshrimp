@@ -33,23 +33,36 @@ class ShrimpApiService(private val context: Context) {
     // Use Config for backend URL
     private val BACKEND_URL = Config.BACKEND_URL
 
-    private suspend fun getFreshToken(): String? {
+    private suspend fun getAuthHeaders(): Map<String, String> {
         return withContext(Dispatchers.IO) {
             try {
-                val user = FirebaseAuth.getInstance().currentUser
-                if (user != null) {
-                    val result = Tasks.await(user.getIdToken(true))
-                    val token = result.token
-                    if (token != null) {
-                        // Save to SharedPreferences
-                        val prefs = context.getSharedPreferences("auth", Context.MODE_PRIVATE)
-                        prefs.edit().putString("idToken", token).apply()
+                val currentUser = com.dung.myapplication.utils.UserSession.getCurrentUser(context)
+                val loginType = com.dung.myapplication.utils.UserSession.getLoginType(context)
+
+                if (loginType == com.dung.myapplication.utils.UserSession.LoginType.PHONE && currentUser?.phone != null) {
+                    // Phone authentication
+                    mapOf("X-Phone-Auth" to currentUser.phone)
+                } else {
+                    // Google authentication
+                    val user = FirebaseAuth.getInstance().currentUser
+                    if (user != null) {
+                        val result = Tasks.await(user.getIdToken(true))
+                        val token = result.token
+                        if (token != null) {
+                            // Save to SharedPreferences
+                            val prefs = context.getSharedPreferences("auth", Context.MODE_PRIVATE)
+                            prefs.edit().putString("idToken", token).apply()
+                            mapOf("Authorization" to token)
+                        } else {
+                            emptyMap()
+                        }
+                    } else {
+                        emptyMap()
                     }
-                    token
-                } else null
+                }
             } catch (e: Exception) {
                 e.printStackTrace()
-                null
+                emptyMap()
             }
         }
     }
@@ -57,9 +70,9 @@ class ShrimpApiService(private val context: Context) {
     suspend fun processImage(bitmap: Bitmap, sourceUrl: String): Result<YoloProcessResponse> {
         return withContext(Dispatchers.IO) {
             try {
-                // Get fresh token
-                val idToken = getFreshToken()
-                if (idToken == null) {
+                // Get auth headers
+                val authHeaders = getAuthHeaders()
+                if (authHeaders.isEmpty()) {
                     return@withContext Result.failure(
                         Exception("Authentication failed. Please login again.")
                     )
@@ -80,7 +93,11 @@ class ShrimpApiService(private val context: Context) {
                     .url("$BACKEND_URL/api/detect-shrimp")
                     .post(jsonBody.toRequestBody("application/json".toMediaType()))
                     .addHeader("User-Agent", "Android-Camera-App")
-                    .addHeader("Authorization", idToken)
+
+                authHeaders.forEach { (key, value) ->
+                    requestBuilder.addHeader(key, value)
+                }
+
                 val request = requestBuilder.build()
 
                 client.newCall(request).execute().use { response ->

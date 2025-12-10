@@ -1,7 +1,6 @@
 package com.dung.myapplication.login
 
 import android.content.Intent
-import android.content.SharedPreferences
 import android.os.Bundle
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
@@ -17,11 +16,14 @@ import com.google.android.gms.common.SignInButton
 import com.google.android.gms.common.api.ApiException
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.GoogleAuthProvider
+import com.google.firebase.firestore.FirebaseFirestore
+import java.security.MessageDigest
 import java.util.concurrent.Executor
 
 class LoginActivity : AppCompatActivity() {
 
     private lateinit var auth: FirebaseAuth
+    private lateinit var firestore: FirebaseFirestore
     private lateinit var googleSignInClient: GoogleSignInClient
     private val RC_SIGN_IN = 100
     private lateinit var biometricExecutor: Executor
@@ -33,15 +35,16 @@ class LoginActivity : AppCompatActivity() {
         setContentView(R.layout.activity_login)
 
         auth = FirebaseAuth.getInstance()
+        firestore = FirebaseFirestore.getInstance()
 
-        // 🔹 Nếu đã đăng nhập → vào Main luôn
-        if (auth.currentUser != null) {
+        // 🔹 Nếu có session đã lưu → vào Main luôn
+        if (com.dung.myapplication.utils.UserSession.isLoggedIn(this)) {
             startActivity(Intent(this, MainActivity::class.java))
             finish()
             return
         }
 
-        val usernameInput = findViewById<EditText>(R.id.usernameInput)
+        val phoneInput = findViewById<EditText>(R.id.phoneInput)
         val passwordInput = findViewById<EditText>(R.id.passwordInput)
         val loginButton = findViewById<Button>(R.id.loginButton)
         val signUpButton = findViewById<TextView>(R.id.signUpButton)
@@ -62,17 +65,10 @@ class LoginActivity : AppCompatActivity() {
             object : BiometricPrompt.AuthenticationCallback() {
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                     super.onAuthenticationSucceeded(result)
-                    val user = auth.currentUser
-                    if (user != null) {
-                        user.getIdToken(true).addOnCompleteListener { tokenTask ->
-                            if (tokenTask.isSuccessful) {
-                                val idToken = tokenTask.result?.token
-                                if (idToken != null) saveIdTokenToPrefs(idToken)
-                            }
-                            Toast.makeText(applicationContext, "Đăng nhập vân tay thành công", Toast.LENGTH_SHORT).show()
-                            startActivity(Intent(this@LoginActivity, MainActivity::class.java))
-                            finish()
-                        }
+                    if (com.dung.myapplication.utils.UserSession.isLoggedIn(this@LoginActivity)) {
+                        Toast.makeText(applicationContext, "Đăng nhập vân tay thành công", Toast.LENGTH_SHORT).show()
+                        startActivity(Intent(this@LoginActivity, MainActivity::class.java))
+                        finish()
                     } else {
                         Toast.makeText(applicationContext, "Vui lòng đăng nhập trước khi dùng vân tay", Toast.LENGTH_SHORT).show()
                     }
@@ -106,32 +102,24 @@ class LoginActivity : AppCompatActivity() {
             }
         }
 
-        // Email/Password login
+        // Phone/Password login
         loginButton.setOnClickListener {
-            val email = usernameInput.text.toString().trim()
+            val phoneNumber = phoneInput.text.toString().trim()
             val password = passwordInput.text.toString().trim()
 
-            if (email.isEmpty() || password.isEmpty()) {
-                Toast.makeText(this, "Vui lòng nhập đủ email và mật khẩu", Toast.LENGTH_SHORT).show()
+            if (phoneNumber.isEmpty() || password.isEmpty()) {
+                Toast.makeText(this, "Vui lòng nhập số điện thoại và mật khẩu", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
 
-            auth.signInWithEmailAndPassword(email, password)
-                .addOnCompleteListener { task ->
-                    if (task.isSuccessful) {
-                        auth.currentUser?.getIdToken(true)?.addOnCompleteListener { tokenTask ->
-                            if (tokenTask.isSuccessful) {
-                                val idToken = tokenTask.result?.token
-                                if (idToken != null) saveIdTokenToPrefs(idToken)
-                            }
-                            Toast.makeText(this, "Đăng nhập thành công!", Toast.LENGTH_SHORT).show()
-                            startActivity(Intent(this, MainActivity::class.java))
-                            finish()
-                        }
-                    } else {
-                        Toast.makeText(this, "Đăng nhập thất bại: ${task.exception?.message}", Toast.LENGTH_LONG).show()
-                    }
-                }
+            // Validate phone number format
+            if (!phoneNumber.startsWith("+")) {
+                Toast.makeText(this, "Số điện thoại phải bắt đầu với +84", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+
+            // Login with Firestore
+            loginWithFirestore(phoneNumber, password)
         }
 
         // SignUp click
@@ -151,6 +139,59 @@ class LoginActivity : AppCompatActivity() {
                 startActivityForResult(signInIntent, RC_SIGN_IN)
             }
         }
+    }
+
+    private fun loginWithFirestore(phoneNumber: String, password: String) {
+        val hashedPassword = hashPassword(password)
+
+        firestore.collection("users")
+            .document(phoneNumber)
+            .get()
+            .addOnSuccessListener { document ->
+                if (document.exists()) {
+                    val storedPassword = document.getString("password")
+                    if (storedPassword == hashedPassword) {
+                        // Extract user information from Firestore
+                        val email = document.getString("email") ?: ""
+                        val username = document.getString("username") ?: email.substringBefore("@")
+                        val fullName = document.getString("fullName") ?: username
+                        val bio = document.getString("bio") ?: "Người dùng"
+                        val role = document.getString("role") ?: "user"
+                        val avatarResId = document.getLong("avatarResId")?.toInt() ?: com.dung.myapplication.R.drawable.avatar
+
+                        // Create User object
+                        val user = com.dung.myapplication.models.User(
+                            id = phoneNumber,
+                            username = username,
+                            fullName = fullName,
+                            email = email,
+                            phone = phoneNumber,
+                            avatarResId = avatarResId,
+                            bio = bio
+                        )
+
+                        // Save to UserSession
+                        val isAdmin = (role == "admin")
+                        com.dung.myapplication.utils.UserSession.saveUser(this, user, isAdmin)
+
+                        Toast.makeText(this, "Đăng nhập thành công!", Toast.LENGTH_SHORT).show()
+                        startActivity(Intent(this, MainActivity::class.java))
+                        finish()
+                    } else {
+                        Toast.makeText(this, "Mật khẩu không đúng", Toast.LENGTH_SHORT).show()
+                    }
+                } else {
+                    Toast.makeText(this, "Số điện thoại chưa được đăng ký", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .addOnFailureListener { e ->
+                Toast.makeText(this, "Lỗi đăng nhập: ${e.message}", Toast.LENGTH_LONG).show()
+            }
+    }
+
+    private fun hashPassword(password: String): String {
+        val bytes = MessageDigest.getInstance("SHA-256").digest(password.toByteArray())
+        return bytes.joinToString("") { "%02x".format(it) }
     }
 
     private fun saveIdTokenToPrefs(idToken: String) {

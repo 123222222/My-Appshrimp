@@ -147,10 +147,12 @@ else:
     print('⚠️  Firebase Admin SDK credential file not found!')
     print(f'Looking for: {FIREBASE_CRED_PATH}')
 
-# Danh sách email được phép truy cập (admin + user được cấp quyền)
+# Danh sách email và phone được phép truy cập (admin + user được cấp quyền)
 PERMITTED_EMAILS_PATH = 'permitted_emails.json'
+PERMITTED_PHONES_PATH = 'permitted_phones.json'  # New: Phone permissions
 PERMITTED_DEVICES_PATH = 'permitted_devices.json'
 ADMIN_EMAIL = os.getenv('ADMIN_EMAIL', 'hodung15032003@gmail.com')
+ADMIN_PHONE = os.getenv('ADMIN_PHONE', '+84987648717')  # Admin phone
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -166,14 +168,57 @@ def save_permitted_emails(emails):
     with open(PERMITTED_EMAILS_PATH, 'w') as f:
         json.dump(emails, f)
 
+def load_permitted_phones():
+    """Load list of phone numbers that are permitted to access the system"""
+    if os.path.exists(PERMITTED_PHONES_PATH):
+        with open(PERMITTED_PHONES_PATH, 'r') as f:
+            return json.load(f)
+    return [ADMIN_PHONE]
+
+def save_permitted_phones(phones):
+    """Save list of permitted phone numbers"""
+    with open(PERMITTED_PHONES_PATH, 'w') as f:
+        json.dump(phones, f)
+
 def requires_google_auth(f):
+    """
+    Authentication decorator that supports both Google email and phone number authentication.
+    For Google: Uses Firebase ID token verification
+    For Phone: Uses special header 'X-Phone-Auth' with phone number from Firestore
+    """
     @wraps(f)
     def decorated(*args, **kwargs):
+        # Check for phone authentication first
+        phone_number = request.headers.get('X-Phone-Auth')
+
+        if phone_number:
+            # Phone authentication
+            logger.info(f"[AUTH] Phone authentication attempt: {phone_number}")
+            permitted_phones = load_permitted_phones()
+            logger.info(f"[AUTH] Permitted phones: {permitted_phones}")
+
+            if phone_number not in permitted_phones:
+                logger.warning(f"[AUTH] Phone not permitted: {phone_number}")
+                return jsonify({
+                    "success": False,
+                    "message": "Phone number not permitted",
+                    "phone": phone_number
+                }), 403
+
+            # Set user identifier for phone users
+            request.user_email = phone_number  # We reuse this field for consistency
+            request.user_phone = phone_number
+            request.is_phone_auth = True
+            logger.info(f"[AUTH] Phone authentication successful: {phone_number}")
+            return f(*args, **kwargs)
+
+        # Fall back to Google token authentication
         id_token = request.headers.get('Authorization')
         logger.info(f"[AUTH] Received id_token: {id_token}")
         if not id_token:
-            logger.warning("[AUTH] Missing Google ID token")
-            return jsonify({"success": False, "message": "Missing Google ID token"}), 401
+            logger.warning("[AUTH] Missing authentication (no token or phone)")
+            return jsonify({"success": False, "message": "Missing authentication"}), 401
+
         try:
             decoded_token = firebase_auth.verify_id_token(id_token)
             email = decoded_token.get('email')
@@ -184,6 +229,7 @@ def requires_google_auth(f):
                 logger.warning(f"[AUTH] Email not permitted: {email}")
                 return jsonify({"success": False, "message": "Email not permitted", "email": email, "permitted": permitted_emails}), 403
             request.user_email = email
+            request.is_phone_auth = False
         except Exception as e:
             logger.error(f"[AUTH] Invalid token: {str(e)}")
             return jsonify({"success": False, "message": f"Invalid token: {str(e)}"}), 401
@@ -195,22 +241,52 @@ def check_auth_status():
     """
     Debug endpoint to check authentication status
     Returns detailed info about token and permissions
-    No authentication required - for debugging only
+    Supports both Google email and phone authentication
     """
     try:
+        phone_number = request.headers.get('X-Phone-Auth')
         id_token = request.headers.get('Authorization')
 
         result = {
             "token_received": id_token is not None,
+            "phone_received": phone_number is not None,
             "token_length": len(id_token) if id_token else 0,
             "permitted_emails_file_exists": os.path.exists(PERMITTED_EMAILS_PATH),
+            "permitted_phones_file_exists": os.path.exists(PERMITTED_PHONES_PATH),
             "permitted_devices_file_exists": os.path.exists(PERMITTED_DEVICES_PATH),
         }
 
+        # Check phone authentication first
+        if phone_number:
+            permitted_phones = load_permitted_phones()
+            result["auth_type"] = "phone"
+            result["phone_number"] = phone_number
+            result["permitted_phones"] = permitted_phones
+            result["phone_permitted"] = phone_number in permitted_phones
+            result["is_admin"] = phone_number == ADMIN_PHONE
+            result["admin_phone"] = ADMIN_PHONE
+
+            # Check device bindings for phone user
+            if phone_number in permitted_phones:
+                permitted_devices = load_permitted_devices()
+                user_devices = []
+                for device_id, binding_info in permitted_devices.items():
+                    owner_identifier = binding_info if isinstance(binding_info, str) else binding_info.get('email')
+                    if owner_identifier == phone_number:
+                        user_devices.append({
+                            "device_id": device_id,
+                            "binding_info": binding_info
+                        })
+                result["user_devices"] = user_devices
+
+            return jsonify(result), 200
+
+        # Fall back to Google token authentication
         if id_token:
             try:
                 decoded_token = firebase_auth.verify_id_token(id_token)
                 email = decoded_token.get('email')
+                result["auth_type"] = "google"
                 result["token_valid"] = True
                 result["decoded_email"] = email
 
@@ -614,6 +690,89 @@ def remove_permitted_email():
     save_permitted_emails(permitted_emails)
     logger.info(f"[ADMIN] Removed email: {email_to_remove}")
     return jsonify({"success": True, "message": "Email removed successfully"})
+
+# ==================== PHONE PERMISSION MANAGEMENT ====================
+@app.route('/api/admin/add-phone', methods=['POST'])
+@requires_google_auth
+def add_permitted_phone():
+    """
+    Chỉ admin mới được thêm phone number mới vào danh sách được phép
+    Hỗ trợ cả admin đăng nhập bằng email hoặc phone
+    """
+    user_id = request.user_email  # Could be email or phone
+    is_admin = (user_id == ADMIN_EMAIL or user_id == ADMIN_PHONE)
+
+    if not is_admin:
+        return jsonify({"success": False, "message": "Only admin can add phone numbers"}), 403
+
+    data = request.json
+    new_phone = data.get('phone')
+    if not new_phone:
+        return jsonify({"success": False, "message": "Missing phone number"}), 400
+
+    # Validate phone format (should start with +)
+    if not new_phone.startswith('+'):
+        return jsonify({"success": False, "message": "Phone must start with country code (e.g., +84)"}), 400
+
+    permitted_phones = load_permitted_phones()
+    if new_phone in permitted_phones:
+        return jsonify({"success": False, "message": "Phone number already permitted"}), 400
+
+    permitted_phones.append(new_phone)
+    save_permitted_phones(permitted_phones)
+    logger.info(f"[ADMIN] Added phone: {new_phone}")
+    return jsonify({"success": True, "message": "Phone number added successfully"})
+
+@app.route('/api/admin/list-phones', methods=['GET'])
+@requires_google_auth
+def list_permitted_phones():
+    """
+    Lấy danh sách phone numbers được phép truy cập
+    Chỉ admin mới được xem
+    """
+    user_id = request.user_email
+    is_admin = (user_id == ADMIN_EMAIL or user_id == ADMIN_PHONE)
+
+    if not is_admin:
+        return jsonify({"success": False, "message": "Only admin can view phone numbers"}), 403
+
+    permitted_phones = load_permitted_phones()
+    return jsonify({
+        "success": True,
+        "phones": permitted_phones,
+        "admin_phone": ADMIN_PHONE
+    })
+
+@app.route('/api/admin/remove-phone', methods=['POST'])
+@requires_google_auth
+def remove_permitted_phone():
+    """
+    Xóa phone number khỏi danh sách được phép
+    Chỉ admin mới được xóa
+    Không được xóa phone admin
+    """
+    user_id = request.user_email
+    is_admin = (user_id == ADMIN_EMAIL or user_id == ADMIN_PHONE)
+
+    if not is_admin:
+        return jsonify({"success": False, "message": "Only admin can remove phone numbers"}), 403
+
+    data = request.json
+    phone_to_remove = data.get('phone')
+    if not phone_to_remove:
+        return jsonify({"success": False, "message": "Missing phone number"}), 400
+
+    if phone_to_remove == ADMIN_PHONE:
+        return jsonify({"success": False, "message": "Cannot remove admin phone"}), 403
+
+    permitted_phones = load_permitted_phones()
+    if phone_to_remove not in permitted_phones:
+        return jsonify({"success": False, "message": "Phone not in permitted list"}), 404
+
+    permitted_phones.remove(phone_to_remove)
+    save_permitted_phones(permitted_phones)
+    logger.info(f"[ADMIN] Removed phone: {phone_to_remove}")
+    return jsonify({"success": True, "message": "Phone number removed successfully"})
 
 # ==================== DETECTION API ====================
 

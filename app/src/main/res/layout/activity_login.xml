@@ -21,13 +21,13 @@
             android:gravity="center"
             android:paddingBottom="32dp" />
 
-        <!-- Username -->
+        <!-- Phone Number -->
         <EditText
-            android:id="@+id/usernameInput"
+            android:id="@+id/phoneInput"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:hint="Email"
-            android:inputType="textEmailAddress"
+            android:hint="Số điện thoại (+84...)"
+            android:inputType="phone"
             android:layout_marginBottom="12dp"
             android:padding="10dp"
             android:background="@drawable/edittext_border_orange"

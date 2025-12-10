@@ -38,19 +38,33 @@ fun MotorControlScreen(
         if (raspDeviceId == null || raspIp == null) {
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 try {
-                    val user = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser
-                    val freshToken = if (user != null) {
-                        val result = com.google.android.gms.tasks.Tasks.await(user.getIdToken(true))
-                        result.token
-                    } else null
+                    // Get auth headers (supports both Google and Phone)
+                    val currentUser = com.dung.myapplication.utils.UserSession.getCurrentUser(context)
+                    val loginType = com.dung.myapplication.utils.UserSession.getLoginType(context)
 
-                    if (freshToken != null) {
+                    val authHeaders = if (loginType == com.dung.myapplication.utils.UserSession.LoginType.PHONE && currentUser?.phone != null) {
+                        mapOf("X-Phone-Auth" to currentUser.phone)
+                    } else {
+                        val user = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser
+                        if (user != null) {
+                            val result = com.google.android.gms.tasks.Tasks.await(user.getIdToken(true))
+                            result.token?.let { mapOf("Authorization" to it) } ?: emptyMap()
+                        } else {
+                            emptyMap()
+                        }
+                    }
+
+                    if (authHeaders.isNotEmpty()) {
                         val client = okhttp3.OkHttpClient()
-                        val request = okhttp3.Request.Builder()
+                        val requestBuilder = okhttp3.Request.Builder()
                             .url("${com.dung.myapplication.models.Config.BACKEND_URL}/api/devices/my-device")
                             .get()
-                            .addHeader("Authorization", freshToken)
-                            .build()
+
+                        authHeaders.forEach { (key, value) ->
+                            requestBuilder.addHeader(key, value)
+                        }
+
+                        val request = requestBuilder.build()
                         val response = client.newCall(request).execute()
                         if (response.isSuccessful) {
                             val jsonResponse = org.json.JSONObject(response.body?.string() ?: "{}")

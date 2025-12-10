@@ -16,8 +16,11 @@ import android.content.Context
 import android.widget.Toast
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.ui.graphics.Color
@@ -66,6 +69,13 @@ fun ProfileScreen(
     var newEmailInput by remember { mutableStateOf("") }
     var emailActionInProgress by remember { mutableStateOf(false) }
 
+    // Phone permission management states
+    val permittedPhones = remember { mutableStateListOf<String>() }
+    var isLoadingPhones by remember { mutableStateOf(false) }
+    var showAddPhoneDialog by remember { mutableStateOf(false) }
+    var newPhoneInput by remember { mutableStateOf("") }
+    var phoneActionInProgress by remember { mutableStateOf(false) }
+
     val scope = rememberCoroutineScope()
     val prefs = context.getSharedPreferences("auth", Context.MODE_PRIVATE)
     val firebaseUser = FirebaseAuth.getInstance().currentUser
@@ -78,23 +88,42 @@ fun ProfileScreen(
     // Admin email (should match backend ADMIN_EMAIL)
     val ADMIN_EMAIL = "hodung15032003@gmail.com"
 
-    // Function to get fresh token
-    suspend fun getFreshToken(): String? {
+    // Check if current user is admin from UserSession (supports both Google and phone login)
+    val isAdminFromSession = com.dung.myapplication.utils.UserSession.isAdmin(context)
+
+    // Get current user info from session
+    val currentUser = com.dung.myapplication.utils.UserSession.getCurrentUser(context)
+    val loginType = com.dung.myapplication.utils.UserSession.getLoginType(context)
+    val isPhoneLogin = (loginType == com.dung.myapplication.utils.UserSession.LoginType.PHONE)
+    val currentPhone = if (isPhoneLogin) currentUser?.phone else null
+
+    // Function to get fresh token or phone auth
+    suspend fun getAuthHeaders(): Map<String, String> {
         return withContext(Dispatchers.IO) {
             try {
-                val user = FirebaseAuth.getInstance().currentUser
-                if (user != null) {
-                    val result = user.getIdToken(true).await()
-                    val token = result.token
-                    if (token != null) {
-                        // Save to SharedPreferences
-                        prefs.edit().putString("idToken", token).apply()
+                if (isPhoneLogin && currentPhone != null) {
+                    // Phone authentication - use X-Phone-Auth header
+                    mapOf("X-Phone-Auth" to currentPhone)
+                } else {
+                    // Google authentication - use Authorization token
+                    val user = FirebaseAuth.getInstance().currentUser
+                    if (user != null) {
+                        val result = user.getIdToken(true).await()
+                        val token = result.token
+                        if (token != null) {
+                            // Save to SharedPreferences
+                            prefs.edit().putString("idToken", token).apply()
+                            mapOf("Authorization" to token)
+                        } else {
+                            emptyMap()
+                        }
+                    } else {
+                        emptyMap()
                     }
-                    token
-                } else null
+                }
             } catch (e: Exception) {
                 e.printStackTrace()
-                null
+                emptyMap()
             }
         }
     }
@@ -103,30 +132,36 @@ fun ProfileScreen(
     LaunchedEffect(Unit) {
         isCheckingBinding = true
 
-        // Check if user is admin
-        isAdmin = (currentEmail == ADMIN_EMAIL)
+        // Check if user is admin (from session or Google email)
+        isAdmin = isAdminFromSession || (currentEmail == ADMIN_EMAIL)
 
-        // First, check if email is permitted
-        val freshToken = getFreshToken()
-        if (freshToken != null) {
+        // Get authentication headers (works for both phone and Google)
+        val authHeaders = getAuthHeaders()
+        if (authHeaders.isNotEmpty()) {
             try {
                 // Check authentication status
                 withContext(Dispatchers.IO) {
-                    val authCheckRequest = Request.Builder()
+                    val authCheckRequestBuilder = Request.Builder()
                         .url("$backendUrl/api/auth/check")
                         .post(okhttp3.RequestBody.create(null, ByteArray(0)))
-                        .addHeader("Authorization", freshToken)
-                        .build()
+
+                    // Add auth headers
+                    authHeaders.forEach { (key, value) ->
+                        authCheckRequestBuilder.addHeader(key, value)
+                    }
+
+                    val authCheckRequest = authCheckRequestBuilder.build()
                     val authResponse = client.newCall(authCheckRequest).execute()
                     if (authResponse.isSuccessful) {
                         val authJson = JSONObject(authResponse.body?.string() ?: "{}")
-                        val emailPermitted = authJson.optBoolean("email_permitted", false)
+                        val permitted = authJson.optBoolean("email_permitted", false) ||
+                                       authJson.optBoolean("phone_permitted", false)
                         withContext(Dispatchers.Main) {
-                            isEmailPermitted = emailPermitted
+                            isEmailPermitted = permitted
                         }
 
-                        if (!emailPermitted) {
-                            // Email not permitted, don't check device binding
+                        if (!permitted) {
+                            // Not permitted, don't check device binding
                             withContext(Dispatchers.Main) {
                                 permissionCheckError = "Tài khoản chưa được cấp quyền"
                             }
@@ -143,13 +178,18 @@ fun ProfileScreen(
                     }
                 }
 
-                // If email is permitted, check device binding
+                // If permitted, check device binding
                 withContext(Dispatchers.IO) {
-                    val request = Request.Builder()
+                    val requestBuilder = Request.Builder()
                         .url("$backendUrl/api/devices/my-device")
                         .get()
-                        .addHeader("Authorization", freshToken)
-                        .build()
+
+                    // Add auth headers
+                    authHeaders.forEach { (key, value) ->
+                        requestBuilder.addHeader(key, value)
+                    }
+
+                    val request = requestBuilder.build()
                     val response = client.newCall(request).execute()
                     if (response.isSuccessful) {
                         val jsonResponse = JSONObject(response.body?.string() ?: "{}")
@@ -161,7 +201,6 @@ fun ProfileScreen(
 
                             // Lấy IP từ SharedPreferences
                             val savedIp = prefs.getString("rasp_ip", null)
-                            val savedDeviceId = prefs.getString("rasp_device_id", null)
 
                             // Ưu tiên IP từ backend, nếu không có thì dùng local
                             val finalIp = deviceIpFromBackend ?: savedIp
@@ -207,14 +246,19 @@ fun ProfileScreen(
         if (isAdmin) {
             isLoadingEmails = true
             try {
-                val freshToken = getFreshToken()
-                if (freshToken != null) {
+                val authHeaders = getAuthHeaders()
+                if (authHeaders.isNotEmpty()) {
                     withContext(Dispatchers.IO) {
-                        val request = Request.Builder()
+                        val requestBuilder = Request.Builder()
                             .url("$backendUrl/api/admin/list-emails")
                             .get()
-                            .addHeader("Authorization", freshToken)
-                            .build()
+
+                        // Add auth headers
+                        authHeaders.forEach { (key, value) ->
+                            requestBuilder.addHeader(key, value)
+                        }
+
+                        val request = requestBuilder.build()
                         val response = client.newCall(request).execute()
                         if (response.isSuccessful) {
                             val jsonResponse = JSONObject(response.body?.string() ?: "{}")
@@ -237,12 +281,51 @@ fun ProfileScreen(
         }
     }
 
+    // Load permitted phones if admin
+    LaunchedEffect(isAdmin) {
+        if (isAdmin) {
+            isLoadingPhones = true
+            try {
+                val authHeaders = getAuthHeaders()
+                if (authHeaders.isNotEmpty()) {
+                    withContext(Dispatchers.IO) {
+                        val requestBuilder = Request.Builder()
+                            .url("$backendUrl/api/admin/list-phones")
+                            .get()
+
+                        authHeaders.forEach { (key, value) ->
+                            requestBuilder.addHeader(key, value)
+                        }
+
+                        val request = requestBuilder.build()
+                        val response = client.newCall(request).execute()
+                        if (response.isSuccessful) {
+                            val jsonResponse = JSONObject(response.body?.string() ?: "{}")
+                            val phonesArray = jsonResponse.optJSONArray("phones")
+                            withContext(Dispatchers.Main) {
+                                permittedPhones.clear()
+                                if (phonesArray != null) {
+                                    for (i in 0 until phonesArray.length()) {
+                                        permittedPhones.add(phonesArray.getString(i))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            isLoadingPhones = false
+        }
+    }
+
     fun loadPermittedEmails() {
         scope.launch {
             isLoadingEmails = true
             try {
-                val freshToken = getFreshToken()
-                if (freshToken == null) {
+                val authHeaders = getAuthHeaders()
+                if (authHeaders.isEmpty()) {
                     withContext(Dispatchers.Main) {
                         Toast.makeText(context, "Lỗi xác thực", Toast.LENGTH_SHORT).show()
                     }
@@ -250,11 +333,16 @@ fun ProfileScreen(
                 }
 
                 withContext(Dispatchers.IO) {
-                    val request = Request.Builder()
+                    val requestBuilder = Request.Builder()
                         .url("$backendUrl/api/admin/list-emails")
                         .get()
-                        .addHeader("Authorization", freshToken)
-                        .build()
+
+                    // Add auth headers
+                    authHeaders.forEach { (key, value) ->
+                        requestBuilder.addHeader(key, value)
+                    }
+
+                    val request = requestBuilder.build()
                     val response = client.newCall(request).execute()
                     if (response.isSuccessful) {
                         val jsonResponse = JSONObject(response.body?.string() ?: "{}")
@@ -287,8 +375,8 @@ fun ProfileScreen(
         scope.launch {
             emailActionInProgress = true
             try {
-                val freshToken = getFreshToken()
-                if (freshToken == null) {
+                val authHeaders = getAuthHeaders()
+                if (authHeaders.isEmpty()) {
                     withContext(Dispatchers.Main) {
                         Toast.makeText(context, "Lỗi xác thực", Toast.LENGTH_SHORT).show()
                     }
@@ -300,11 +388,16 @@ fun ProfileScreen(
                         put("email", email)
                     }.toString()
 
-                    val request = Request.Builder()
+                    val requestBuilder = Request.Builder()
                         .url("$backendUrl/api/admin/add-email")
                         .post(jsonBody.toRequestBody("application/json".toMediaType()))
-                        .addHeader("Authorization", freshToken)
-                        .build()
+
+                    // Add auth headers
+                    authHeaders.forEach { (key, value) ->
+                        requestBuilder.addHeader(key, value)
+                    }
+
+                    val request = requestBuilder.build()
                     val response = client.newCall(request).execute()
                     val responseBody = response.body?.string() ?: "{}"
                     val jsonResponse = JSONObject(responseBody)
@@ -335,8 +428,8 @@ fun ProfileScreen(
         scope.launch {
             emailActionInProgress = true
             try {
-                val freshToken = getFreshToken()
-                if (freshToken == null) {
+                val authHeaders = getAuthHeaders()
+                if (authHeaders.isEmpty()) {
                     withContext(Dispatchers.Main) {
                         Toast.makeText(context, "Lỗi xác thực", Toast.LENGTH_SHORT).show()
                     }
@@ -348,11 +441,16 @@ fun ProfileScreen(
                         put("email", email)
                     }.toString()
 
-                    val request = Request.Builder()
+                    val requestBuilder = Request.Builder()
                         .url("$backendUrl/api/admin/remove-email")
                         .post(jsonBody.toRequestBody("application/json".toMediaType()))
-                        .addHeader("Authorization", freshToken)
-                        .build()
+
+                    // Add auth headers
+                    authHeaders.forEach { (key, value) ->
+                        requestBuilder.addHeader(key, value)
+                    }
+
+                    val request = requestBuilder.build()
                     val response = client.newCall(request).execute()
                     val responseBody = response.body?.string() ?: "{}"
                     val jsonResponse = JSONObject(responseBody)
@@ -374,6 +472,159 @@ fun ProfileScreen(
                 }
             }
             emailActionInProgress = false
+        }
+    }
+
+    // ==================== PHONE PERMISSION MANAGEMENT ====================
+    fun loadPermittedPhones() {
+        scope.launch {
+            isLoadingPhones = true
+            try {
+                val authHeaders = getAuthHeaders()
+                if (authHeaders.isEmpty()) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "Lỗi xác thực", Toast.LENGTH_SHORT).show()
+                    }
+                    return@launch
+                }
+
+                withContext(Dispatchers.IO) {
+                    val requestBuilder = Request.Builder()
+                        .url("$backendUrl/api/admin/list-phones")
+                        .get()
+
+                    authHeaders.forEach { (key, value) ->
+                        requestBuilder.addHeader(key, value)
+                    }
+
+                    val request = requestBuilder.build()
+                    val response = client.newCall(request).execute()
+                    if (response.isSuccessful) {
+                        val jsonResponse = JSONObject(response.body?.string() ?: "{}")
+                        val phonesArray = jsonResponse.optJSONArray("phones")
+                        withContext(Dispatchers.Main) {
+                            permittedPhones.clear()
+                            if (phonesArray != null) {
+                                for (i in 0 until phonesArray.length()) {
+                                    permittedPhones.add(phonesArray.getString(i))
+                                }
+                            }
+                        }
+                    } else {
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, "Lỗi tải danh sách phone", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Lỗi: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+            isLoadingPhones = false
+        }
+    }
+
+    fun addPermittedPhone(phone: String) {
+        scope.launch {
+            phoneActionInProgress = true
+            try {
+                val authHeaders = getAuthHeaders()
+                if (authHeaders.isEmpty()) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "Lỗi xác thực", Toast.LENGTH_SHORT).show()
+                    }
+                    return@launch
+                }
+
+                withContext(Dispatchers.IO) {
+                    val jsonBody = JSONObject().apply {
+                        put("phone", phone)
+                    }.toString()
+
+                    val requestBuilder = Request.Builder()
+                        .url("$backendUrl/api/admin/add-phone")
+                        .post(jsonBody.toRequestBody("application/json".toMediaType()))
+
+                    authHeaders.forEach { (key, value) ->
+                        requestBuilder.addHeader(key, value)
+                    }
+
+                    val request = requestBuilder.build()
+                    val response = client.newCall(request).execute()
+                    val responseBody = response.body?.string() ?: "{}"
+                    val jsonResponse = JSONObject(responseBody)
+
+                    withContext(Dispatchers.Main) {
+                        if (response.isSuccessful) {
+                            Toast.makeText(context, "Thêm phone thành công", Toast.LENGTH_SHORT).show()
+                            loadPermittedPhones()
+                            newPhoneInput = ""
+                            showAddPhoneDialog = false
+                        } else {
+                            val message = jsonResponse.optString("message", "Lỗi không xác định")
+                            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Lỗi: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+            phoneActionInProgress = false
+        }
+    }
+
+    fun removePermittedPhone(phone: String) {
+        scope.launch {
+            phoneActionInProgress = true
+            try {
+                val authHeaders = getAuthHeaders()
+                if (authHeaders.isEmpty()) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "Lỗi xác thực", Toast.LENGTH_SHORT).show()
+                    }
+                    return@launch
+                }
+
+                withContext(Dispatchers.IO) {
+                    val jsonBody = JSONObject().apply {
+                        put("phone", phone)
+                    }.toString()
+
+                    val requestBuilder = Request.Builder()
+                        .url("$backendUrl/api/admin/remove-phone")
+                        .post(jsonBody.toRequestBody("application/json".toMediaType()))
+
+                    authHeaders.forEach { (key, value) ->
+                        requestBuilder.addHeader(key, value)
+                    }
+
+                    val request = requestBuilder.build()
+                    val response = client.newCall(request).execute()
+                    val responseBody = response.body?.string() ?: "{}"
+                    val jsonResponse = JSONObject(responseBody)
+
+                    withContext(Dispatchers.Main) {
+                        if (response.isSuccessful) {
+                            Toast.makeText(context, "Xóa phone thành công", Toast.LENGTH_SHORT).show()
+                            loadPermittedPhones()
+                        } else {
+                            val message = jsonResponse.optString("message", "Lỗi không xác định")
+                            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Lỗi: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+            phoneActionInProgress = false
         }
     }
 
@@ -430,9 +681,9 @@ fun ProfileScreen(
     fun bindDevice(ip: String, deviceId: String) {
         scope.launch {
             try {
-                // Get fresh token first
-                val freshToken = getFreshToken()
-                if (freshToken == null) {
+                // Get auth headers first
+                val authHeaders = getAuthHeaders()
+                if (authHeaders.isEmpty()) {
                     withContext(Dispatchers.Main) {
                         Toast.makeText(context, "Lỗi xác thực. Vui lòng đăng nhập lại", Toast.LENGTH_LONG).show()
                     }
@@ -452,11 +703,16 @@ fun ProfileScreen(
                         put("device_ip", ip)  // Gửi IP để backend lưu
                     }.toString()
 
-                    val request = Request.Builder()
+                    val requestBuilder = Request.Builder()
                         .url("$backendUrl/api/devices/bind")
                         .post(jsonBody.toRequestBody("application/json".toMediaType()))
-                        .addHeader("Authorization", freshToken)
-                        .build()
+
+                    // Add auth headers
+                    authHeaders.forEach { (key, value) ->
+                        requestBuilder.addHeader(key, value)
+                    }
+
+                    val request = requestBuilder.build()
 
                     val response = client.newCall(request).execute()
                     val responseBody = response.body?.string() ?: "{}"
@@ -501,9 +757,9 @@ fun ProfileScreen(
     fun unbindDevice() {
         scope.launch {
             try {
-                // Get fresh token first
-                val freshToken = getFreshToken()
-                if (freshToken == null) {
+                // Get auth headers first
+                val authHeaders = getAuthHeaders()
+                if (authHeaders.isEmpty()) {
                     withContext(Dispatchers.Main) {
                         Toast.makeText(context, "Lỗi xác thực. Vui lòng đăng nhập lại", Toast.LENGTH_LONG).show()
                     }
@@ -519,11 +775,16 @@ fun ProfileScreen(
                             put("device_id", deviceId)
                         }.toString()
 
-                        val request = Request.Builder()
+                        val requestBuilder = Request.Builder()
                             .url("$backendUrl/api/devices/unbind")
                             .post(jsonBody.toRequestBody("application/json".toMediaType()))
-                            .addHeader("Authorization", freshToken)
-                            .build()
+
+                        // Add auth headers
+                        authHeaders.forEach { (key, value) ->
+                            requestBuilder.addHeader(key, value)
+                        }
+
+                        val request = requestBuilder.build()
 
                         val response = client.newCall(request).execute()
                         val responseBody = response.body?.string() ?: "{}"
@@ -824,107 +1085,350 @@ fun ProfileScreen(
                 }
             }
 
-            // Email Permission Management Card (Only for Admin)
+            // 🎨 NEW: Combined Permission Management Card with Tabs (Admin Only)
             if (isAdmin) {
+                var selectedTab by remember { mutableStateOf(0) }
+                val tabs = listOf("📧 Email", "📱 Phone")
+
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.tertiaryContainer
-                    )
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
                 ) {
                     Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                        modifier = Modifier.fillMaxWidth()
                     ) {
+                        // Header
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = "Quản lý quyền truy cập",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Button(
-                                onClick = { showAddEmailDialog = true },
-                                enabled = !emailActionInProgress
-                            ) {
-                                Text("+ Thêm Email")
+                            Column {
+                                Text(
+                                    text = "🔐 Quản lý quyền truy cập",
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "Cấp quyền cho email hoặc số điện thoại",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
                         }
 
-                        if (isLoadingEmails) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.align(Alignment.CenterHorizontally)
-                            )
-                        } else if (permittedEmails.isEmpty()) {
-                            Text(
-                                text = "Chưa có email nào được cấp quyền",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        } else {
-                            Text(
-                                text = "Email được phép truy cập:",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                        // Tabs
+                        TabRow(
+                            selectedTabIndex = selectedTab,
+                            containerColor = Color.Transparent
+                        ) {
+                            tabs.forEachIndexed { index, title ->
+                                Tab(
+                                    selected = selectedTab == index,
+                                    onClick = { selectedTab = index },
+                                    text = {
+                                        Text(
+                                            text = title,
+                                            fontWeight = if (selectedTab == index) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                    }
+                                )
+                            }
+                        }
 
-                            LazyColumn(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .heightIn(max = 250.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                items(permittedEmails) { email ->
-                                    Surface(
+                        // Content
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            when (selectedTab) {
+                                0 -> {
+                                    // EMAIL TAB
+                                    Row(
                                         modifier = Modifier.fillMaxWidth(),
-                                        shape = RoundedCornerShape(8.dp),
-                                        color = if (email == ADMIN_EMAIL)
-                                            MaterialTheme.colorScheme.primaryContainer
-                                        else
-                                            MaterialTheme.colorScheme.surface,
-                                        tonalElevation = 2.dp
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Row(
+                                        Text(
+                                            text = "Danh sách Email (${permittedEmails.size})",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        FilledTonalButton(
+                                            onClick = { showAddEmailDialog = true },
+                                            enabled = !emailActionInProgress
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Add,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Thêm")
+                                        }
+                                    }
+
+                                    if (isLoadingEmails) {
+                                        Box(
                                             modifier = Modifier
                                                 .fillMaxWidth()
-                                                .padding(12.dp),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
+                                                .height(150.dp),
+                                            contentAlignment = Alignment.Center
                                         ) {
-                                            Column(modifier = Modifier.weight(1f)) {
+                                            CircularProgressIndicator()
+                                        }
+                                    } else if (permittedEmails.isEmpty()) {
+                                        Surface(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            color = MaterialTheme.colorScheme.surfaceVariant,
+                                            shape = RoundedCornerShape(12.dp)
+                                        ) {
+                                            Column(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(24.dp),
+                                                horizontalAlignment = Alignment.CenterHorizontally
+                                            ) {
                                                 Text(
-                                                    text = email,
-                                                    style = MaterialTheme.typography.bodyMedium,
-                                                    fontWeight = if (email == ADMIN_EMAIL)
-                                                        FontWeight.Bold
-                                                    else
-                                                        FontWeight.Normal
+                                                    text = "📭",
+                                                    style = MaterialTheme.typography.displaySmall
                                                 )
-                                                if (email == ADMIN_EMAIL) {
-                                                    Text(
-                                                        text = "Admin",
-                                                        style = MaterialTheme.typography.labelSmall,
-                                                        color = MaterialTheme.colorScheme.primary
-                                                    )
+                                                Spacer(modifier = Modifier.height(8.dp))
+                                                Text(
+                                                    text = "Chưa có email nào",
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    fontWeight = FontWeight.Medium
+                                                )
+                                                Text(
+                                                    text = "Nhấn 'Thêm' để cấp quyền",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
+                                    } else {
+                                        LazyColumn(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .heightIn(max = 300.dp),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            items(permittedEmails) { email ->
+                                                Surface(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    shape = RoundedCornerShape(12.dp),
+                                                    color = if (email == ADMIN_EMAIL)
+                                                        MaterialTheme.colorScheme.primaryContainer
+                                                    else
+                                                        MaterialTheme.colorScheme.surface,
+                                                    tonalElevation = 2.dp,
+                                                    shadowElevation = 1.dp
+                                                ) {
+                                                    Row(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .padding(12.dp),
+                                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Row(
+                                                            modifier = Modifier.weight(1f),
+                                                            verticalAlignment = Alignment.CenterVertically
+                                                        ) {
+                                                            Icon(
+                                                                imageVector = if (email == ADMIN_EMAIL)
+                                                                    Icons.Default.CheckCircle
+                                                                else
+                                                                    Icons.Default.Email,
+                                                                contentDescription = null,
+                                                                tint = if (email == ADMIN_EMAIL)
+                                                                    MaterialTheme.colorScheme.primary
+                                                                else
+                                                                    MaterialTheme.colorScheme.onSurfaceVariant,
+                                                                modifier = Modifier.size(20.dp)
+                                                            )
+                                                            Spacer(modifier = Modifier.width(12.dp))
+                                                            Column {
+                                                                Text(
+                                                                    text = email,
+                                                                    style = MaterialTheme.typography.bodyMedium,
+                                                                    fontWeight = if (email == ADMIN_EMAIL)
+                                                                        FontWeight.Bold
+                                                                    else
+                                                                        FontWeight.Normal
+                                                                )
+                                                                if (email == ADMIN_EMAIL) {
+                                                                    Text(
+                                                                        text = "👑 Admin",
+                                                                        style = MaterialTheme.typography.labelSmall,
+                                                                        color = MaterialTheme.colorScheme.primary
+                                                                    )
+                                                                }
+                                                            }
+                                                        }
+                                                        if (email != ADMIN_EMAIL) {
+                                                            IconButton(
+                                                                onClick = { removePermittedEmail(email) },
+                                                                enabled = !emailActionInProgress
+                                                            ) {
+                                                                Icon(
+                                                                    imageVector = Icons.Default.Delete,
+                                                                    contentDescription = "Xóa",
+                                                                    tint = MaterialTheme.colorScheme.error
+                                                                )
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                             }
-                                            if (email != ADMIN_EMAIL) {
-                                                IconButton(
-                                                    onClick = {
-                                                        removePermittedEmail(email)
-                                                    },
-                                                    enabled = !emailActionInProgress
+                                        }
+                                    }
+                                }
+                                1 -> {
+                                    // PHONE TAB
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "Danh sách Phone (${permittedPhones.size})",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        FilledTonalButton(
+                                            onClick = { showAddPhoneDialog = true },
+                                            enabled = !phoneActionInProgress
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Add,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Thêm")
+                                        }
+                                    }
+
+                                    if (isLoadingPhones) {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(150.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            CircularProgressIndicator()
+                                        }
+                                    } else if (permittedPhones.isEmpty()) {
+                                        Surface(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            color = MaterialTheme.colorScheme.surfaceVariant,
+                                            shape = RoundedCornerShape(12.dp)
+                                        ) {
+                                            Column(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(24.dp),
+                                                horizontalAlignment = Alignment.CenterHorizontally
+                                            ) {
+                                                Text(
+                                                    text = "📵",
+                                                    style = MaterialTheme.typography.displaySmall
+                                                )
+                                                Spacer(modifier = Modifier.height(8.dp))
+                                                Text(
+                                                    text = "Chưa có phone nào",
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    fontWeight = FontWeight.Medium
+                                                )
+                                                Text(
+                                                    text = "Nhấn 'Thêm' để cấp quyền",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
+                                    } else {
+                                        LazyColumn(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .heightIn(max = 300.dp),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            items(permittedPhones) { phone ->
+                                                val ADMIN_PHONE = "+84987648717"  // Your admin phone
+                                                Surface(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    shape = RoundedCornerShape(12.dp),
+                                                    color = if (phone == ADMIN_PHONE)
+                                                        MaterialTheme.colorScheme.primaryContainer
+                                                    else
+                                                        MaterialTheme.colorScheme.surface,
+                                                    tonalElevation = 2.dp,
+                                                    shadowElevation = 1.dp
                                                 ) {
-                                                    Icon(
-                                                        imageVector = Icons.Default.Delete,
-                                                        contentDescription = "Xóa",
-                                                        tint = MaterialTheme.colorScheme.error
-                                                    )
+                                                    Row(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .padding(12.dp),
+                                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Row(
+                                                            modifier = Modifier.weight(1f),
+                                                            verticalAlignment = Alignment.CenterVertically
+                                                        ) {
+                                                            Icon(
+                                                                imageVector = if (phone == ADMIN_PHONE)
+                                                                    Icons.Default.CheckCircle
+                                                                else
+                                                                    Icons.Default.Phone,
+                                                                contentDescription = null,
+                                                                tint = if (phone == ADMIN_PHONE)
+                                                                    MaterialTheme.colorScheme.primary
+                                                                else
+                                                                    MaterialTheme.colorScheme.onSurfaceVariant,
+                                                                modifier = Modifier.size(20.dp)
+                                                            )
+                                                            Spacer(modifier = Modifier.width(12.dp))
+                                                            Column {
+                                                                Text(
+                                                                    text = phone,
+                                                                    style = MaterialTheme.typography.bodyMedium,
+                                                                    fontWeight = if (phone == ADMIN_PHONE)
+                                                                        FontWeight.Bold
+                                                                    else
+                                                                        FontWeight.Normal
+                                                                )
+                                                                if (phone == ADMIN_PHONE) {
+                                                                    Text(
+                                                                        text = "👑 Admin Phone",
+                                                                        style = MaterialTheme.typography.labelSmall,
+                                                                        color = MaterialTheme.colorScheme.primary
+                                                                    )
+                                                                }
+                                                            }
+                                                        }
+                                                        if (phone != ADMIN_PHONE) {
+                                                            IconButton(
+                                                                onClick = { removePermittedPhone(phone) },
+                                                                enabled = !phoneActionInProgress
+                                                            ) {
+                                                                Icon(
+                                                                    imageVector = Icons.Default.Delete,
+                                                                    contentDescription = "Xóa",
+                                                                    tint = MaterialTheme.colorScheme.error
+                                                                )
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
@@ -997,4 +1501,76 @@ fun ProfileScreen(
             }
         )
     }
+
+    // Add Phone Dialog
+    if (showAddPhoneDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                if (!phoneActionInProgress) {
+                    showAddPhoneDialog = false
+                    newPhoneInput = ""
+                }
+            },
+            title = { Text("Thêm Phone Number") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Nhập số điện thoại muốn cấp quyền truy cập:",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Text(
+                        text = "Format: +84xxxxxxxxx",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = newPhoneInput,
+                        onValueChange = { newPhoneInput = it },
+                        label = { Text("Phone Number") },
+                        placeholder = { Text("+84987654321") },
+                        singleLine = true,
+                        enabled = !phoneActionInProgress,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (newPhoneInput.isNotBlank() && newPhoneInput.startsWith("+")) {
+                            addPermittedPhone(newPhoneInput.trim())
+                        } else {
+                            Toast.makeText(
+                                context,
+                                "Phone phải bắt đầu với +",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    },
+                    enabled = !phoneActionInProgress && newPhoneInput.isNotBlank()
+                ) {
+                    if (phoneActionInProgress) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            color = MaterialTheme.colorScheme.onPrimary
+                        )
+                    } else {
+                        Text("Thêm")
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showAddPhoneDialog = false
+                        newPhoneInput = ""
+                    },
+                    enabled = !phoneActionInProgress
+                ) {
+                    Text("Hủy")
+                }
+            }
+        )
+    }
 }
+

@@ -68,27 +68,40 @@ fun HomeScreen(
         if (raspDeviceId == null || raspIp == null) {
             android.util.Log.d("HomeScreen", "No local device data, checking backend...")
 
-            val freshToken = withContext(Dispatchers.IO) {
+            val authHeaders = withContext(Dispatchers.IO) {
                 try {
-                    val user = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser
-                    if (user != null) {
-                        val result = com.google.android.gms.tasks.Tasks.await(user.getIdToken(true))
-                        result.token
-                    } else null
+                    val currentUser = com.dung.myapplication.utils.UserSession.getCurrentUser(context)
+                    val loginType = com.dung.myapplication.utils.UserSession.getLoginType(context)
+
+                    if (loginType == com.dung.myapplication.utils.UserSession.LoginType.PHONE && currentUser?.phone != null) {
+                        mapOf("X-Phone-Auth" to currentUser.phone)
+                    } else {
+                        val user = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser
+                        if (user != null) {
+                            val result = com.google.android.gms.tasks.Tasks.await(user.getIdToken(true))
+                            result.token?.let { mapOf("Authorization" to it) } ?: emptyMap()
+                        } else {
+                            emptyMap()
+                        }
+                    }
                 } catch (e: Exception) {
-                    null
+                    emptyMap()
                 }
             }
 
-            if (freshToken != null) {
+            if (authHeaders.isNotEmpty()) {
                 withContext(Dispatchers.IO) {
                     try {
                         val client = okhttp3.OkHttpClient()
-                        val request = okhttp3.Request.Builder()
+                        val requestBuilder = okhttp3.Request.Builder()
                             .url("${Config.BACKEND_URL}/api/devices/my-device")
                             .get()
-                            .addHeader("Authorization", freshToken)
-                            .build()
+
+                        authHeaders.forEach { (key, value) ->
+                            requestBuilder.addHeader(key, value)
+                        }
+
+                        val request = requestBuilder.build()
                         val response = client.newCall(request).execute()
                         if (response.isSuccessful) {
                             val jsonResponse = org.json.JSONObject(response.body?.string() ?: "{}")
@@ -143,20 +156,31 @@ fun HomeScreen(
 
             android.util.Log.d("HomeScreen", "Starting camera stream...")
             try {
-                // Get fresh token for authentication
-                val freshToken = withContext(Dispatchers.IO) {
+                // Get auth headers for authentication (supports both Google and Phone)
+                val authHeaders = withContext(Dispatchers.IO) {
                     try {
-                        val user = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser
-                        if (user != null) {
-                            val result = com.google.android.gms.tasks.Tasks.await(user.getIdToken(true))
-                            result.token
-                        } else null
+                        val currentUser = com.dung.myapplication.utils.UserSession.getCurrentUser(context)
+                        val loginType = com.dung.myapplication.utils.UserSession.getLoginType(context)
+
+                        if (loginType == com.dung.myapplication.utils.UserSession.LoginType.PHONE && currentUser?.phone != null) {
+                            // Phone authentication
+                            mapOf("X-Phone-Auth" to currentUser.phone)
+                        } else {
+                            // Google authentication
+                            val user = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser
+                            if (user != null) {
+                                val result = com.google.android.gms.tasks.Tasks.await(user.getIdToken(true))
+                                result.token?.let { mapOf("Authorization" to it) } ?: emptyMap()
+                            } else {
+                                emptyMap()
+                            }
+                        }
                     } catch (e: Exception) {
-                        null
+                        emptyMap()
                     }
                 }
 
-                if (freshToken == null) {
+                if (authHeaders.isEmpty()) {
                     errorMessage = "Lỗi xác thực. Vui lòng đăng nhập lại"
                     isLoading = false
                     return@LaunchedEffect
@@ -168,11 +192,16 @@ fun HomeScreen(
                         .readTimeout(30, TimeUnit.SECONDS)
                         .build()
 
-                    val request = Request.Builder()
+                    val requestBuilder = Request.Builder()
                         .url(streamUrl)
                         .addHeader("User-Agent", "Android-Camera-App")
-                        .addHeader("Authorization", freshToken)  // Add Firebase token
-                        .build()
+
+                    // Add auth headers (either Authorization for Google or X-Phone-Auth for phone)
+                    authHeaders.forEach { (key, value) ->
+                        requestBuilder.addHeader(key, value)
+                    }
+
+                    val request = requestBuilder.build()
 
                     android.util.Log.d("HomeScreen", "Connecting to: $streamUrl with auth token")
                     try {

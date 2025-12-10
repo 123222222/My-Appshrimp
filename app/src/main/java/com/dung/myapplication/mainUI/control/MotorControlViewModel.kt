@@ -1,20 +1,25 @@
 package com.dung.myapplication.mainUI.control
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.dung.myapplication.models.*
 import com.dung.myapplication.utils.GpioApiService
+import com.google.android.gms.tasks.Tasks
 import com.google.firebase.auth.FirebaseAuth
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 @HiltViewModel
-class MotorControlViewModel @Inject constructor() : ViewModel() {
+class MotorControlViewModel @Inject constructor(
+    private val application: Application
+) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(MotorControlUiState())
     val uiState: StateFlow<MotorControlUiState> = _uiState.asStateFlow()
@@ -27,12 +32,40 @@ class MotorControlViewModel @Inject constructor() : ViewModel() {
         MotorInfo(id = "motor3", name = "Motor 3", pin = 22)
     )
 
+    private suspend fun getAuthHeaders(): Map<String, String> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val context = application.applicationContext
+                val currentUser = com.dung.myapplication.utils.UserSession.getCurrentUser(context)
+                val loginType = com.dung.myapplication.utils.UserSession.getLoginType(context)
+
+                if (loginType == com.dung.myapplication.utils.UserSession.LoginType.PHONE && currentUser?.phone != null) {
+                    // Phone authentication
+                    mapOf("X-Phone-Auth" to currentUser.phone)
+                } else {
+                    // Google authentication
+                    val token = FirebaseAuth.getInstance().currentUser?.getIdToken(false)?.let { task ->
+                        Tasks.await(task)?.token
+                    }
+                    if (token != null) {
+                        mapOf("Authorization" to token)
+                    } else {
+                        emptyMap()
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                emptyMap()
+            }
+        }
+    }
+
     fun initialize(baseUrl: String) {
         viewModelScope.launch {
             try {
-                val idToken = FirebaseAuth.getInstance().currentUser?.getIdToken(false)?.await()?.token
-                if (idToken != null) {
-                    apiService = GpioApiService(baseUrl, idToken)
+                val authHeaders = getAuthHeaders()
+                if (authHeaders.isNotEmpty()) {
+                    apiService = GpioApiService(baseUrl, authHeaders)
                     _uiState.value = _uiState.value.copy(motors = motors)
                     refreshStatus()  // This will now properly sync autoModeRunning state
                 } else {

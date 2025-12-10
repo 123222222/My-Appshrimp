@@ -45,23 +45,37 @@ class GalleryViewModel @Inject constructor(
         //loadImages()
     }
 
-    private suspend fun getFreshToken(): String? {
+    private suspend fun getAuthHeaders(): Map<String, String> {
         return withContext(Dispatchers.IO) {
             try {
-                val user = FirebaseAuth.getInstance().currentUser
-                if (user != null) {
-                    val result = Tasks.await(user.getIdToken(true))
-                    val token = result.token
-                    if (token != null) {
-                        // Save to SharedPreferences
-                        val prefs = getApplication<Application>().getSharedPreferences("auth", android.content.Context.MODE_PRIVATE)
-                        prefs.edit().putString("idToken", token).apply()
+                val context = getApplication<Application>().applicationContext
+                val currentUser = com.dung.myapplication.utils.UserSession.getCurrentUser(context)
+                val loginType = com.dung.myapplication.utils.UserSession.getLoginType(context)
+
+                if (loginType == com.dung.myapplication.utils.UserSession.LoginType.PHONE && currentUser?.phone != null) {
+                    // Phone authentication
+                    mapOf("X-Phone-Auth" to currentUser.phone)
+                } else {
+                    // Google authentication
+                    val user = FirebaseAuth.getInstance().currentUser
+                    if (user != null) {
+                        val result = Tasks.await(user.getIdToken(true))
+                        val token = result.token
+                        if (token != null) {
+                            // Save to SharedPreferences
+                            val prefs = getApplication<Application>().getSharedPreferences("auth", android.content.Context.MODE_PRIVATE)
+                            prefs.edit().putString("idToken", token).apply()
+                            mapOf("Authorization" to token)
+                        } else {
+                            emptyMap()
+                        }
+                    } else {
+                        emptyMap()
                     }
-                    token
-                } else null
+                }
             } catch (e: Exception) {
                 e.printStackTrace()
-                null
+                emptyMap()
             }
         }
     }
@@ -81,9 +95,9 @@ class GalleryViewModel @Inject constructor(
                 return@launch
             }
 
-            // Get fresh token
-            val freshToken = getFreshToken()
-            if (freshToken == null) {
+            // Get auth headers
+            val authHeaders = getAuthHeaders()
+            if (authHeaders.isEmpty()) {
                 errorMessage.value = "Lỗi xác thực. Vui lòng đăng nhập lại"
                 isLoading.value = false
                 return@launch
@@ -92,11 +106,15 @@ class GalleryViewModel @Inject constructor(
             // Verify device is still bound with backend
             val isDeviceBound = withContext(Dispatchers.IO) {
                 try {
-                    val request = Request.Builder()
+                    val requestBuilder = Request.Builder()
                         .url("$BACKEND_URL/api/devices/my-device")
                         .get()
-                        .addHeader("Authorization", freshToken)
-                        .build()
+
+                    authHeaders.forEach { (key, value) ->
+                        requestBuilder.addHeader(key, value)
+                    }
+
+                    val request = requestBuilder.build()
                     client.newCall(request).execute().use { response ->
                         if (response.isSuccessful) {
                             val jsonResponse = org.json.JSONObject(response.body?.string() ?: "{}")
@@ -125,12 +143,16 @@ class GalleryViewModel @Inject constructor(
 
             withContext(Dispatchers.IO) {
                 try {
-                    val request = Request.Builder()
+                    val requestBuilder = Request.Builder()
                         .url("$BACKEND_URL/api/shrimp-images")
                         .get()
                         .addHeader("User-Agent", "Android-Camera-App")
-                        .addHeader("Authorization", freshToken)
-                        .build()
+
+                    authHeaders.forEach { (key, value) ->
+                        requestBuilder.addHeader(key, value)
+                    }
+
+                    val request = requestBuilder.build()
 
                     client.newCall(request).execute().use { response ->
                         if (!response.isSuccessful) {
@@ -163,21 +185,25 @@ class GalleryViewModel @Inject constructor(
 
     fun deleteImage(imageId: String) {
         viewModelScope.launch {
-            // Get fresh token
-            val freshToken = getFreshToken()
-            if (freshToken == null) {
+            // Get auth headers
+            val authHeaders = getAuthHeaders()
+            if (authHeaders.isEmpty()) {
                 errorMessage.value = "Lỗi xác thực. Vui lòng đăng nhập lại"
                 return@launch
             }
 
             withContext(Dispatchers.IO) {
                 try {
-                    val request = Request.Builder()
+                    val requestBuilder = Request.Builder()
                         .url("$BACKEND_URL/api/shrimp-images/$imageId")
                         .delete()
                         .addHeader("User-Agent", "Android-Camera-App")
-                        .addHeader("Authorization", freshToken)
-                        .build()
+
+                    authHeaders.forEach { (key, value) ->
+                        requestBuilder.addHeader(key, value)
+                    }
+
+                    val request = requestBuilder.build()
 
                     client.newCall(request).execute().use { response ->
                         if (response.isSuccessful) {

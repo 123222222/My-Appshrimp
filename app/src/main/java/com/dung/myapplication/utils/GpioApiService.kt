@@ -11,7 +11,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
 
-class GpioApiService(private val baseUrl: String, private val idToken: String) {
+class GpioApiService(private val baseUrl: String, private val authHeaders: Map<String, String>) {
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
@@ -25,11 +25,15 @@ class GpioApiService(private val baseUrl: String, private val idToken: String) {
 
     // GPIO Status
     suspend fun getGpioStatus(): GpioStatusResponse = withContext(Dispatchers.IO) {
-        val request = Request.Builder()
+        val requestBuilder = Request.Builder()
             .url("$baseUrl/api/gpio/status")
-            .header("Authorization", idToken)
             .get()
-            .build()
+
+        authHeaders.forEach { (key, value) ->
+            requestBuilder.header(key, value)
+        }
+
+        val request = requestBuilder.build()
 
         val response = client.newCall(request).execute()
         val responseBody = response.body?.string() ?: throw Exception("Empty response")
@@ -47,11 +51,15 @@ class GpioApiService(private val baseUrl: String, private val idToken: String) {
         val jsonBody = json.encodeToString(requestData)
         val body = jsonBody.toRequestBody("application/json".toMediaType())
 
-        val request = Request.Builder()
+        val requestBuilder = Request.Builder()
             .url("$baseUrl/api/gpio/manual/control")
-            .header("Authorization", idToken)
             .post(body)
-            .build()
+
+        authHeaders.forEach { (key, value) ->
+            requestBuilder.header(key, value)
+        }
+
+        val request = requestBuilder.build()
 
         val response = client.newCall(request).execute()
         val responseBody = response.body?.string() ?: throw Exception("Empty response")
@@ -69,11 +77,15 @@ class GpioApiService(private val baseUrl: String, private val idToken: String) {
         val jsonBody = json.encodeToString(requestData)
         val body = jsonBody.toRequestBody("application/json".toMediaType())
 
-        val request = Request.Builder()
+        val requestBuilder = Request.Builder()
             .url("$baseUrl/api/gpio/auto/schedule")
-            .header("Authorization", idToken)
             .post(body)
-            .build()
+
+        authHeaders.forEach { (key, value) ->
+            requestBuilder.header(key, value)
+        }
+
+        val request = requestBuilder.build()
 
         val response = client.newCall(request).execute()
         val responseBody = response.body?.string() ?: throw Exception("Empty response")
@@ -87,11 +99,15 @@ class GpioApiService(private val baseUrl: String, private val idToken: String) {
 
     // Auto Mode - Get Schedule
     suspend fun getSchedule(motorId: String): ScheduleResponse = withContext(Dispatchers.IO) {
-        val request = Request.Builder()
+        val requestBuilder = Request.Builder()
             .url("$baseUrl/api/gpio/auto/schedule/$motorId")
-            .header("Authorization", idToken)
             .get()
-            .build()
+
+        authHeaders.forEach { (key, value) ->
+            requestBuilder.header(key, value)
+        }
+
+        val request = requestBuilder.build()
 
         val response = client.newCall(request).execute()
         val responseBody = response.body?.string() ?: throw Exception("Empty response")
@@ -105,11 +121,15 @@ class GpioApiService(private val baseUrl: String, private val idToken: String) {
 
     // Auto Mode - Start
     suspend fun startAutoMode(): AutoModeResponse = withContext(Dispatchers.IO) {
-        val request = Request.Builder()
+        val requestBuilder = Request.Builder()
             .url("$baseUrl/api/gpio/auto/start")
-            .header("Authorization", idToken)
             .post("".toRequestBody())
-            .build()
+
+        authHeaders.forEach { (key, value) ->
+            requestBuilder.header(key, value)
+        }
+
+        val request = requestBuilder.build()
 
         val response = client.newCall(request).execute()
         val responseBody = response.body?.string() ?: throw Exception("Empty response")
@@ -123,11 +143,15 @@ class GpioApiService(private val baseUrl: String, private val idToken: String) {
 
     // Auto Mode - Stop
     suspend fun stopAutoMode(): AutoModeResponse = withContext(Dispatchers.IO) {
-        val request = Request.Builder()
+        val requestBuilder = Request.Builder()
             .url("$baseUrl/api/gpio/auto/stop")
-            .header("Authorization", idToken)
             .post("".toRequestBody())
-            .build()
+
+        authHeaders.forEach { (key, value) ->
+            requestBuilder.header(key, value)
+        }
+
+        val request = requestBuilder.build()
 
         val response = client.newCall(request).execute()
         val responseBody = response.body?.string() ?: throw Exception("Empty response")
@@ -141,11 +165,15 @@ class GpioApiService(private val baseUrl: String, private val idToken: String) {
 
     // Get Current Mode
     suspend fun getMode(): ModeResponse = withContext(Dispatchers.IO) {
-        val request = Request.Builder()
+        val requestBuilder = Request.Builder()
             .url("$baseUrl/api/gpio/mode")
-            .header("Authorization", idToken)
             .get()
-            .build()
+
+        authHeaders.forEach { (key, value) ->
+            requestBuilder.header(key, value)
+        }
+
+        val request = requestBuilder.build()
 
         val response = client.newCall(request).execute()
         val responseBody = response.body?.string() ?: throw Exception("Empty response")

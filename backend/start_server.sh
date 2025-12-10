@@ -103,7 +103,15 @@ if [ ! -f .env ]; then
     echo "CLOUDINARY_API_KEY=your_api_key"
     echo "CLOUDINARY_API_SECRET=your_api_secret"
     echo "FIREBASE_SERVICE_ACCOUNT_KEY_PATH=path/to/serviceAccountKey.json"
+    echo "SENDER_EMAIL=your_email@gmail.com"
+    echo "SENDER_PASSWORD=your_app_password"
     exit 1
+fi
+
+# Kiểm tra file send_reset_email.py
+if [ ! -f "send_reset_email.py" ]; then
+    echo "⚠️  Cảnh báo: File send_reset_email.py không tìm thấy!"
+    echo "   Email reset service sẽ không hoạt động"
 fi
 
 # Kiểm tra model
@@ -124,7 +132,7 @@ python3 app_complete.py &
 FLASK_PID=$!
 
 # Đợi Flask server khởi động
-sleep 5
+sleep 3
 
 # Kiểm tra Flask server có chạy không
 if ps -p $FLASK_PID > /dev/null; then
@@ -132,6 +140,22 @@ if ps -p $FLASK_PID > /dev/null; then
 else
     echo "❌ Flask server failed to start"
     exit 1
+fi
+
+# Khởi động Email Reset Service ở background
+echo "📧 Starting Email Reset Service on port 5001..."
+python3 send_reset_email.py &
+EMAIL_PID=$!
+
+# Đợi Email service khởi động
+sleep 3
+
+# Kiểm tra Email service có chạy không
+if ps -p $EMAIL_PID > /dev/null; then
+    echo "✅ Email Reset Service started successfully (PID: $EMAIL_PID)"
+else
+    echo "⚠️  Email Reset Service failed to start (optional service)"
+    EMAIL_PID=""
 fi
 
 # Khởi động ngrok
@@ -142,8 +166,14 @@ ngrok http 8000
 
 # Khi ngrok tắt, tắt Flask server
 echo ""
-echo "🛑 Stopping Flask server..."
+echo "🛑 Stopping servers..."
 kill $FLASK_PID
+
+# Tắt Email service nếu đang chạy
+if [ -n "$EMAIL_PID" ] && ps -p $EMAIL_PID > /dev/null; then
+    kill $EMAIL_PID
+    echo "✅ Email Reset Service stopped"
+fi
 
 # Cleanup GPIO pins (nếu đang chạy trên Raspberry Pi)
 echo "🔌 Cleaning up GPIO pins..."
