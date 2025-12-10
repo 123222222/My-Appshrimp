@@ -19,6 +19,17 @@ import json
 import logging
 import socket
 
+# ==================== TIMEZONE SETUP ====================
+# Set timezone to Vietnam (UTC+7) if not already set
+if not os.getenv('TZ'):
+    os.environ['TZ'] = 'Asia/Ho_Chi_Minh'
+    try:
+        time.tzset()  # Apply timezone on Unix systems
+        print("✅ Timezone set to Asia/Ho_Chi_Minh (UTC+7)")
+    except AttributeError:
+        # Windows doesn't have tzset
+        print("⚠️  Note: tzset() not available on this platform")
+
 # Load environment variables
 load_dotenv()
 
@@ -1118,6 +1129,468 @@ def health_check():
         "mongodb": "connected" if collection is not None else "not connected",
         "cloudinary": "configured"
     })
+
+# ==================== GPIO CONTROL ====================
+try:
+    import RPi.GPIO as GPIO
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setwarnings(False)
+
+    # Define GPIO pins
+    GPIO_PINS = {
+        'motor1': 17,
+        'motor2': 27,
+        'motor3': 22
+    }
+
+    # Setup GPIO pins
+    for pin in GPIO_PINS.values():
+        GPIO.setup(pin, GPIO.OUT)
+        GPIO.output(pin, GPIO.LOW)
+
+    print("✅ GPIO initialized successfully!")
+    GPIO_AVAILABLE = True
+except Exception as e:
+    print(f"⚠️  GPIO initialization failed: {e}")
+    GPIO_AVAILABLE = False
+
+# Auto mode state
+auto_mode_active = False
+auto_mode_thread = None
+auto_mode_lock = threading.Lock()
+auto_schedules = {
+    'motor1': {'enabled': False, 'start_time': '08:00', 'end_time': '18:00', 'days': []},
+    'motor2': {'enabled': False, 'start_time': '08:00', 'end_time': '18:00', 'days': []},
+    'motor3': {'enabled': False, 'start_time': '08:00', 'end_time': '18:00', 'days': []}
+}
+
+def check_schedule(motor_id):
+    """Check if motor should be on based on schedule"""
+    schedule = auto_schedules[motor_id]
+
+    if not schedule['enabled']:
+        logger.debug(f"[SCHEDULE] {motor_id}: Disabled")
+        return False
+
+    from datetime import datetime
+    now = datetime.now()
+    current_time = now.strftime('%H:%M')
+    current_day = now.strftime('%A')
+
+    # Check if current day is in schedule
+    if schedule['days'] and current_day not in schedule['days']:
+        logger.debug(f"[SCHEDULE] {motor_id}: Current day '{current_day}' not in schedule days {schedule['days']}")
+        return False
+
+    # Check if current time is in range
+    start_time = schedule['start_time']
+    end_time = schedule['end_time']
+
+    in_time_range = start_time <= current_time <= end_time
+
+    if not in_time_range:
+        logger.debug(f"[SCHEDULE] {motor_id}: Current time '{current_time}' NOT in range [{start_time} - {end_time}]")
+    else:
+        logger.info(f"[SCHEDULE] {motor_id}: ✅ ACTIVE - Time '{current_time}' in range [{start_time} - {end_time}], Day '{current_day}' in {schedule['days']}")
+
+    return in_time_range
+
+def auto_mode_worker():
+    """Worker thread for auto mode"""
+    global auto_mode_active
+    logger.info("[AUTO] ========== Auto mode worker started ==========")
+
+    from datetime import datetime
+
+    # Log initial state immediately
+    now = datetime.now()
+    current_time = now.strftime('%H:%M')
+    current_day = now.strftime('%A')
+    logger.info(f"[AUTO] Worker starting at {current_time} on {current_day}")
+    logger.info(f"[AUTO] GPIO Available: {GPIO_AVAILABLE}")
+
+    for motor_id in GPIO_PINS.keys():
+        schedule = auto_schedules[motor_id]
+        logger.info(f"[AUTO] {motor_id} schedule: enabled={schedule['enabled']}, days={schedule['days']}, time={schedule['start_time']}-{schedule['end_time']}")
+
+    last_log_time = time.time()
+
+    while auto_mode_active:
+        try:
+            current_time_unix = time.time()
+            # Log every 5 seconds to see what's happening
+            should_log = (current_time_unix - last_log_time) >= 5
+
+            now = datetime.now()
+            current_time = now.strftime('%H:%M')
+            current_day = now.strftime('%A')
+
+            if GPIO_AVAILABLE:
+                for motor_id, pin in GPIO_PINS.items():
+                    should_be_on = check_schedule(motor_id)
+                    current_state = GPIO.input(pin)
+                    new_state = GPIO.HIGH if should_be_on else GPIO.LOW
+
+                    # Only change if different
+                    if current_state != new_state:
+                        GPIO.output(pin, new_state)
+                        logger.info(f"[AUTO] ⚡ {motor_id} (pin {pin}) changed to {'ON' if should_be_on else 'OFF'}")
+                    elif should_log:
+                        logger.info(f"[AUTO] {motor_id} (pin {pin}) remains {'ON' if should_be_on else 'OFF'} at {current_time} on {current_day}")
+            else:
+                if should_log:
+                    logger.warning("[AUTO] GPIO not available, running in simulation mode")
+                    for motor_id in GPIO_PINS.keys():
+                        should_be_on = check_schedule(motor_id)
+                        logger.info(f"[AUTO] [SIMULATION] {motor_id} should be {'ON' if should_be_on else 'OFF'} | Time: {current_time}, Day: {current_day}, Schedule: {auto_schedules[motor_id]}")
+
+            if should_log:
+                last_log_time = current_time_unix
+
+            time.sleep(1)  # Check every second
+        except Exception as e:
+            logger.error(f"[AUTO] Error in auto mode: {e}", exc_info=True)
+
+    logger.info("[AUTO] ========== Auto mode worker stopped ==========")
+
+@app.route('/api/gpio/status', methods=['GET'])
+@requires_google_auth
+def get_gpio_status():
+    """Get current GPIO pin states"""
+    try:
+        status = {}
+        if GPIO_AVAILABLE:
+            for motor_id, pin in GPIO_PINS.items():
+                status[motor_id] = {
+                    'pin': pin,
+                    'state': GPIO.input(pin)
+                }
+        else:
+            for motor_id, pin in GPIO_PINS.items():
+                status[motor_id] = {
+                    'pin': pin,
+                    'state': 0
+                }
+
+        return jsonify({
+            'success': True,
+            'status': status,
+            'auto_mode': auto_mode_active,
+            'gpio_available': GPIO_AVAILABLE
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500
+
+@app.route('/api/gpio/manual/control', methods=['POST'])
+@requires_google_auth
+def manual_control_gpio():
+    """Manual control of GPIO pins"""
+    try:
+        data = request.get_json()
+        motor_id = data.get('motor_id')
+        state = data.get('state')  # 1 for ON, 0 for OFF
+
+        if motor_id not in GPIO_PINS:
+            return jsonify({
+                'success': False,
+                'message': 'Invalid motor_id'
+            }), 400
+
+        # Check if auto mode is active
+        with auto_mode_lock:
+            if auto_mode_active:
+                return jsonify({
+                    'success': False,
+                    'message': 'Cannot manual control while auto mode is active'
+                }), 400
+
+        if GPIO_AVAILABLE:
+            pin = GPIO_PINS[motor_id]
+            GPIO.output(pin, GPIO.HIGH if state else GPIO.LOW)
+
+        logger.info(f"[GPIO] Manual control: {motor_id} (pin {GPIO_PINS[motor_id]}) set to {state}")
+
+        return jsonify({
+            'success': True,
+            'motor_id': motor_id,
+            'pin': GPIO_PINS[motor_id],
+            'state': state
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500
+
+@app.route('/api/gpio/auto/schedule', methods=['POST'])
+@requires_google_auth
+def set_auto_schedule():
+    """Set schedule for auto mode"""
+    try:
+        data = request.get_json()
+        motor_id = data.get('motor_id')
+        schedule = data.get('schedule')
+
+        if motor_id not in GPIO_PINS:
+            return jsonify({
+                'success': False,
+                'message': 'Invalid motor_id'
+            }), 400
+
+        # Update schedule
+        auto_schedules[motor_id] = {
+            'enabled': schedule.get('enabled', False),
+            'start_time': schedule.get('start_time', '08:00'),
+            'end_time': schedule.get('end_time', '18:00'),
+            'days': schedule.get('days', [])
+        }
+
+        logger.info(f"[AUTO] Schedule updated for {motor_id}: {auto_schedules[motor_id]}")
+
+        return jsonify({
+            'success': True,
+            'motor_id': motor_id,
+            'schedule': auto_schedules[motor_id]
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500
+
+@app.route('/api/gpio/auto/schedule/<motor_id>', methods=['GET'])
+@requires_google_auth
+def get_auto_schedule(motor_id):
+    """Get schedule for a motor"""
+    try:
+        if motor_id not in GPIO_PINS:
+            return jsonify({
+                'success': False,
+                'message': 'Invalid motor_id'
+            }), 400
+
+        return jsonify({
+            'success': True,
+            'motor_id': motor_id,
+            'schedule': auto_schedules[motor_id]
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500
+
+@app.route('/api/gpio/auto/start', methods=['POST'])
+@requires_google_auth
+def start_auto_mode():
+    """Start auto mode"""
+    global auto_mode_active, auto_mode_thread
+
+    try:
+        from datetime import datetime
+        now = datetime.now()
+        current_time = now.strftime('%H:%M')
+        current_day = now.strftime('%A')
+
+        logger.info(f"[AUTO] Start request received. Current state: auto_mode_active={auto_mode_active}")
+        logger.info(f"[AUTO] Current time: {current_time}, Current day: {current_day}")
+        logger.info(f"[AUTO] All schedules state: {json.dumps(auto_schedules, indent=2)}")
+
+        with auto_mode_lock:
+            if auto_mode_active:
+                logger.warning("[AUTO] Auto mode is already running, returning 400")
+                return jsonify({
+                    'success': False,
+                    'message': 'Auto mode is already running'
+                }), 400
+
+            # Check if at least one schedule is enabled
+            enabled_schedules = [mid for mid, sch in auto_schedules.items() if sch['enabled']]
+            if not enabled_schedules:
+                logger.warning("[AUTO] No schedules are enabled")
+                logger.warning(f"[AUTO] Schedules detail: {auto_schedules}")
+                return jsonify({
+                    'success': False,
+                    'message': 'No schedules are enabled. Please enable at least one schedule.'
+                }), 400
+
+            # Validate schedules have days configured
+            for motor_id in enabled_schedules:
+                if not auto_schedules[motor_id]['days']:
+                    logger.warning(f"[AUTO] {motor_id} has no days configured")
+                    return jsonify({
+                        'success': False,
+                        'message': f'{motor_id} schedule is enabled but has no active days configured'
+                    }), 400
+
+            # Turn off all manual controls first
+            if GPIO_AVAILABLE:
+                for pin in GPIO_PINS.values():
+                    GPIO.output(pin, GPIO.LOW)
+
+            auto_mode_active = True
+            auto_mode_thread = threading.Thread(target=auto_mode_worker, daemon=True)
+            auto_mode_thread.start()
+
+        logger.info(f"[AUTO] Auto mode started successfully with {len(enabled_schedules)} enabled schedule(s)")
+
+        return jsonify({
+            'success': True,
+            'message': 'Auto mode started',
+            'schedules': auto_schedules
+        })
+    except Exception as e:
+        auto_mode_active = False
+        logger.error(f"[AUTO] Error starting auto mode: {e}")
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500
+
+@app.route('/api/gpio/auto/stop', methods=['POST'])
+@requires_google_auth
+def stop_auto_mode():
+    """Stop auto mode"""
+    global auto_mode_active
+
+    try:
+        with auto_mode_lock:
+            if not auto_mode_active:
+                return jsonify({
+                    'success': False,
+                    'message': 'Auto mode is not running'
+                }), 400
+
+            auto_mode_active = False
+
+            # Turn off all motors
+            if GPIO_AVAILABLE:
+                for pin in GPIO_PINS.values():
+                    GPIO.output(pin, GPIO.LOW)
+
+        logger.info("[AUTO] Auto mode stopped")
+
+        return jsonify({
+            'success': True,
+            'message': 'Auto mode stopped'
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500
+
+@app.route('/api/gpio/mode', methods=['GET'])
+@requires_google_auth
+def get_mode():
+    """Get current mode (auto or manual)"""
+    try:
+        return jsonify({
+            'success': True,
+            'mode': 'auto' if auto_mode_active else 'manual',
+            'auto_mode_active': auto_mode_active
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500
+
+@app.route('/api/gpio/debug/schedule-check', methods=['GET'])
+@requires_google_auth
+def debug_schedule_check():
+    """Debug endpoint to check current schedule status"""
+    try:
+        from datetime import datetime
+        now = datetime.now()
+        current_time = now.strftime('%H:%M')
+        current_day = now.strftime('%A')
+
+        debug_info = {
+            'current_time': current_time,
+            'current_day': current_day,
+            'auto_mode_active': auto_mode_active,
+            'gpio_available': GPIO_AVAILABLE,
+            'schedules': {}
+        }
+
+        for motor_id in GPIO_PINS.keys():
+            schedule = auto_schedules[motor_id]
+            should_be_on = check_schedule(motor_id)
+
+            debug_info['schedules'][motor_id] = {
+                'enabled': schedule['enabled'],
+                'start_time': schedule['start_time'],
+                'end_time': schedule['end_time'],
+                'days': schedule['days'],
+                'should_be_on': should_be_on,
+                'day_match': current_day in schedule['days'] if schedule['days'] else False,
+                'time_match': schedule['start_time'] <= current_time <= schedule['end_time'],
+                'pin': GPIO_PINS[motor_id]
+            }
+
+            if GPIO_AVAILABLE:
+                debug_info['schedules'][motor_id]['current_pin_state'] = GPIO.input(GPIO_PINS[motor_id])
+
+        return jsonify({
+            'success': True,
+            'debug': debug_info
+        })
+    except Exception as e:
+        logger.error(f"[DEBUG] Error in schedule check: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500
+
+@app.route('/api/gpio/debug/timezone', methods=['GET'])
+def debug_timezone():
+    """Debug endpoint to check server timezone and current time"""
+    try:
+        from datetime import datetime
+        import subprocess
+
+        now = datetime.now()
+
+        # Get timezone info from system
+        try:
+            tz_result = subprocess.run(['timedatectl'], capture_output=True, text=True, timeout=5)
+            timedatectl_output = tz_result.stdout
+        except:
+            timedatectl_output = "Could not get timedatectl output (might not be on Linux)"
+
+        # Get TZ environment variable
+        tz_env = os.getenv('TZ', 'Not set')
+
+        debug_info = {
+            'server_time': now.strftime('%Y-%m-%d %H:%M:%S'),
+            'server_time_24h': now.strftime('%H:%M'),
+            'server_day': now.strftime('%A'),
+            'server_timestamp': now.timestamp(),
+            'timezone_env': tz_env,
+            'timedatectl': timedatectl_output,
+            'expected_timezone': 'Asia/Ho_Chi_Minh (UTC+7)',
+            'timezone_is_correct': tz_env == 'Asia/Ho_Chi_Minh',
+            'instructions_if_wrong': {
+                '1_system_level': 'sudo timedatectl set-timezone Asia/Ho_Chi_Minh',
+                '2_restart_server': 'Restart Flask server after timezone change',
+                '3_or_use_start_script': './start_server.sh (auto-sets timezone)'
+            }
+        }
+
+        return jsonify({
+            'success': True,
+            'debug': debug_info
+        })
+    except Exception as e:
+        logger.error(f"[DEBUG] Error in timezone check: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500
 
 # ==================== UDP RESPONDER FOR DEVICE DISCOVERY ====================
 DEVICE_ID = os.getenv('DEVICE_ID', 'raspberrypi-001')

@@ -14,6 +14,7 @@ A comprehensive IoT system for shrimp farming that uses AI/ML for automated shri
 - **Multi-User Support**: Independent device binding per user
 - **Email Permission Management**: Admin can add/remove users
 - **Role-Based Access**: Admin and regular user roles
+- **📡 WiFi Configuration**: Remote WiFi management for Raspberry Pi from mobile app
 
 ## 🔐 Authentication & Authorization
 
@@ -37,10 +38,12 @@ A comprehensive IoT system for shrimp farming that uses AI/ML for automated shri
 - Device management (bind/unbind)
 - Email permission management
 - Image gallery management
+- WiFi configuration & management
 
 ### Android App
 - Google Sign-In
 - Profile screen with device management
+- WiFi configuration for Raspberry Pi
 - Live camera feed viewer
 - Camera capture & detection
 - Gallery view with detection history
@@ -197,6 +200,8 @@ See [BACKEND_API_DOCS.md](BACKEND_API_DOCS.md) for detailed API documentation.
 
 - [Architecture](ARCHITECTURE.md) - System architecture and data flow
 - [Device Binding Guide](DEVICE_BINDING_GUIDE.md) - Multi-user device binding
+- [WiFi Configuration Guide](WIFI_CONFIGURATION_GUIDE.md) - Remote WiFi management
+- [WiFi Troubleshooting](WIFI_TROUBLESHOOTING.md) - Debug WiFi issues
 - [Quick Start Guide](QUICK_START.md) - Step-by-step setup
 - [Remote Access Setup](REMOTE_ACCESS_GUIDE.md) - ngrok setup
 - [System Summary](TOM_TAT_HE_THONG.md) - Vietnamese summary

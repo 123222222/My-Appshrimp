@@ -8,4 +8,5 @@ opencv-python
 Pillow
 tflite-runtime
 firebase-admin
+RPi.GPIO
 

@@ -48,13 +48,8 @@ fun NavGraph(
         // 🕹️ Control
         composable<MotorControl> {
             MotorControlScreen(
-                onHomeClick = { navController.navigate(Home) },
-                onChartClick = { navController.navigate(Chart) },
-                onControlClick = { /* đang ở Control */ },
-                onGalleryClick = { navController.navigate(Gallery) },
-                onProfileClick = { navController.navigate(Profile) },
-                onLogoutClick = { navController.navigate(Logout) },
-                onBackClick = { navController.navigateUp() }
+                baseUrl = "https://unstrengthening-elizabeth-nondispensible.ngrok-free.dev",
+                onNavigateBack = { navController.navigateUp() }
             )
         }
 
