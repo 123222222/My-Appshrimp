@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Logo đơn giản - Hình tôm cách điệu -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="120dp"
+    android:height="120dp"
+    android:viewportWidth="120"
+    android:viewportHeight="120">
+
+    <!-- Background Circle với gradient -->
+    <path
+        android:fillColor="#D32F2F"
+        android:pathData="M60,10 A50,50 0 1,1 60,110 A50,50 0 1,1 60,10 Z"/>
+
+    <!-- Inner white circle -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M60,20 A40,40 0 1,1 60,100 A40,40 0 1,1 60,20 Z"/>
+
+    <!-- Shrimp body (simplified) -->
+    <path
+        android:fillColor="#D32F2F"
+        android:pathData="M70,50 Q80,50 85,55 Q90,60 85,65 Q80,70 70,70 L50,70 Q40,70 35,65 Q30,60 35,55 Q40,50 50,50 Z"/>
+
+    <!-- Shrimp head -->
+    <path
+        android:fillColor="#FF6F00"
+        android:pathData="M40,50 Q35,50 32,47 Q30,45 32,42 Q35,40 40,40 L45,40 L45,50 Z"/>
+
+    <!-- Shrimp tail -->
+    <path
+        android:fillColor="#FF6F00"
+        android:pathData="M70,50 L80,45 L82,50 L80,55 L70,50 Z"/>
+
+    <!-- Decorative lines -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2"
+        android:pathData="M50,55 L65,55"/>
+
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2"
+        android:pathData="M50,60 L65,60"/>
+
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2"
+        android:pathData="M50,65 L65,65"/>
+</vector>
+

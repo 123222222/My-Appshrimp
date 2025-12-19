@@ -394,11 +394,18 @@ def parse_yolo_output(outputs, original_shape, conf_threshold=0.25, iou_threshol
     detections = []
     orig_h, orig_w = original_shape[:2]
 
+    # Log để debug
+    print(f"[DEBUG] Original image shape: {orig_w}x{orig_h}")
+    print(f"[DEBUG] Model input shape: {INPUT_WIDTH}x{INPUT_HEIGHT}")
+
     if len(outputs) == 0:
         return detections
 
     if len(outputs) == 1:
         output = outputs[0]
+
+        # Log output shape
+        print(f"[DEBUG] YOLO output shape: {output.shape}")
 
         if len(output.shape) == 3:
             output = output[0]
@@ -406,6 +413,8 @@ def parse_yolo_output(outputs, original_shape, conf_threshold=0.25, iou_threshol
             boxes = []
             scores = []
             class_ids = []
+
+            detection_count = 0
 
             for detection in output:
                 if len(detection) >= 6:
@@ -424,10 +433,35 @@ def parse_yolo_output(outputs, original_shape, conf_threshold=0.25, iou_threshol
                     if conf < conf_threshold:
                         continue
 
-                    x1 = int((x - w/2) * orig_w)
-                    y1 = int((y - h/2) * orig_h)
-                    x2 = int((x + w/2) * orig_w)
-                    y2 = int((y + h/2) * orig_h)
+                    # Log raw detection values
+                    if detection_count < 3:  # Only log first 3 detections
+                        print(f"[DEBUG] Detection {detection_count}: x={x}, y={y}, w={w}, h={h}, conf={conf}")
+                    detection_count += 1
+
+                    # Check if coordinates are normalized (0-1) or in pixels
+                    # If max value > 1, likely in pixels relative to input size
+                    if max(x, y, w, h) > 1.0:
+                        # Coordinates are in pixels relative to model input size (320x320)
+                        # Need to scale to original image size
+                        scale_x = orig_w / INPUT_WIDTH
+                        scale_y = orig_h / INPUT_HEIGHT
+
+                        x1 = int((x - w/2) * scale_x)
+                        y1 = int((y - h/2) * scale_y)
+                        x2 = int((x + w/2) * scale_x)
+                        y2 = int((y + h/2) * scale_y)
+
+                        if detection_count <= 3:
+                            print(f"[DEBUG] Pixel mode - Scaled box: ({x1},{y1}) to ({x2},{y2})")
+                    else:
+                        # Coordinates are normalized (0-1), convert to original image coordinates
+                        x1 = int((x - w/2) * orig_w)
+                        y1 = int((y - h/2) * orig_h)
+                        x2 = int((x + w/2) * orig_w)
+                        y2 = int((y + h/2) * orig_h)
+
+                        if detection_count <= 3:
+                            print(f"[DEBUG] Normalized mode - Scaled box: ({x1},{y1}) to ({x2},{y2})")
 
                     boxes.append([x1, y1, x2, y2])
                     scores.append(float(conf))
@@ -464,7 +498,7 @@ def parse_yolo_output(outputs, original_shape, conf_threshold=0.25, iou_threshol
     return detections
 
 def draw_detections(image_np, detections):
-    """Vẽ bounding boxes lên ảnh"""
+    """Vẽ bounding boxes lên ảnh với thông tin hiển thị ở giữa bên trong box"""
     img = image_np.copy()
 
     for det in detections:
@@ -479,30 +513,77 @@ def draw_detections(image_np, detections):
         x2 = int(x + w/2)
         y2 = int(y + h/2)
 
-        color = (0, 255, 0)
+        # Vẽ bounding box
+        color = (0, 255, 0)  # Green color
         cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
 
-        # Label với confidence, length và weight
+        # Chuẩn bị thông tin hiển thị
         conf = det['confidence']
         length = det.get('length', 0)
         weight = det.get('weight', 0)
-        label = f"{det['className']} {conf:.2f}"
-        label2 = f"L:{length}cm W:{weight}g"
 
-        # Vẽ background cho label chính
-        label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
-        cv2.rectangle(img, (x1, y1 - label_size[1] - 10),
-                     (x1 + label_size[0], y1), color, -1)
-        cv2.putText(img, label, (x1, y1 - 5),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+        # Tạo các dòng text
+        line1 = f"{det['className']}"
+        line2 = f"{conf:.2f}"
+        line3 = f"L:{length:.1f}cm"
+        line4 = f"W:{weight:.1f}g"
 
-        # Vẽ background cho label length/weight
-        label2_size, _ = cv2.getTextSize(label2, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
-        cv2.rectangle(img, (x1, y2),
-                     (x1 + label2_size[0] + 4, y2 + label2_size[1] + 8),
-                     color, -1)
-        cv2.putText(img, label2, (x1 + 2, y2 + label2_size[1] + 4),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1)
+        # Cài đặt font
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.5
+        thickness = 2
+
+        # Tính toán kích thước text
+        line1_size = cv2.getTextSize(line1, font, font_scale, thickness)[0]
+        line2_size = cv2.getTextSize(line2, font, font_scale, thickness)[0]
+        line3_size = cv2.getTextSize(line3, font, font_scale, thickness)[0]
+        line4_size = cv2.getTextSize(line4, font, font_scale, thickness)[0]
+
+        # Tính toán chiều cao tổng và chiều rộng max
+        line_height = max(line1_size[1], line2_size[1], line3_size[1], line4_size[1]) + 5
+        max_width = max(line1_size[0], line2_size[0], line3_size[0], line4_size[0])
+
+        # Tính tọa độ giữa box
+        center_x = x
+        center_y = y
+
+        # Tạo background semi-transparent cho text (vẽ hình chữ nhật đen với opacity)
+        overlay = img.copy()
+        bg_padding = 8
+        bg_x1 = int(center_x - max_width/2 - bg_padding)
+        bg_y1 = int(center_y - 2*line_height - bg_padding)
+        bg_x2 = int(center_x + max_width/2 + bg_padding)
+        bg_y2 = int(center_y + 2*line_height + bg_padding)
+
+        # Đảm bảo background nằm trong box
+        bg_x1 = max(bg_x1, x1 + 5)
+        bg_y1 = max(bg_y1, y1 + 5)
+        bg_x2 = min(bg_x2, x2 - 5)
+        bg_y2 = min(bg_y2, y2 - 5)
+
+        cv2.rectangle(overlay, (bg_x1, bg_y1), (bg_x2, bg_y2), (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.6, img, 0.4, 0, img)
+
+        # Vẽ text căn giữa
+        # Line 1: Class name
+        text_x1 = int(center_x - line1_size[0]/2)
+        text_y1 = int(center_y - line_height * 1.5)
+        cv2.putText(img, line1, (text_x1, text_y1), font, font_scale, (255, 255, 255), thickness)
+
+        # Line 2: Confidence
+        text_x2 = int(center_x - line2_size[0]/2)
+        text_y2 = int(center_y - line_height * 0.5)
+        cv2.putText(img, line2, (text_x2, text_y2), font, font_scale, (255, 255, 255), thickness)
+
+        # Line 3: Length
+        text_x3 = int(center_x - line3_size[0]/2)
+        text_y3 = int(center_y + line_height * 0.5)
+        cv2.putText(img, line3, (text_x3, text_y3), font, font_scale, (0, 255, 255), thickness)
+
+        # Line 4: Weight
+        text_x4 = int(center_x - line4_size[0]/2)
+        text_y4 = int(center_y + line_height * 1.5)
+        cv2.putText(img, line4, (text_x4, text_y4), font, font_scale, (0, 255, 255), thickness)
 
     return img
 

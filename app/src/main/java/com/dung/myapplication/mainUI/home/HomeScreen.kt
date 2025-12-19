@@ -383,16 +383,22 @@ fun HomeScreen(
                     }
                 }
                 detectedImageUrl != null -> {
-                    // Show detected image with bounding boxes
+                    // Show detected image with bounding boxes and detection info
                     Box(modifier = Modifier.fillMaxSize()) {
+                        // Background detected image
                         AsyncImage(
                             model = detectedImageUrl,
                             contentDescription = "Detection Result",
                             modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Fit
+                            contentScale = ContentScale.Fit,
+                            onSuccess = { state ->
+                                // The image already has bounding boxes drawn by backend
+                                // Backend draws: bbox, confidence, length, weight on the image
+                                android.util.Log.d("HomeScreen", "Detection image loaded successfully")
+                            }
                         )
 
-                        // Badge showing detection count
+                        // Top badge showing total count
                         Surface(
                             modifier = Modifier
                                 .align(Alignment.TopCenter)
@@ -406,6 +412,19 @@ fun HomeScreen(
                                 style = MaterialTheme.typography.titleMedium,
                                 color = Color.White
                             )
+                        }
+
+                        // Bottom button to return to live stream
+                        Button(
+                            onClick = {
+                                detectedImageUrl = null
+                                detectionCount = 0
+                            },
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 32.dp)
+                        ) {
+                            Text("Quay lại camera")
                         }
                     }
                 }

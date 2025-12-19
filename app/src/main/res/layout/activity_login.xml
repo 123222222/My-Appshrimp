@@ -11,13 +11,38 @@
         android:padding="24dp"
         android:gravity="center_horizontal">
 
+        <!-- App Logo -->
+        <ImageView
+            android:id="@+id/appLogo"
+            android:layout_width="120dp"
+            android:layout_height="120dp"
+            android:layout_marginTop="32dp"
+            android:layout_marginBottom="24dp"
+            android:src="@drawable/app_logo_image"
+            android:contentDescription="@string/app_name"
+            android:scaleType="centerInside"
+            android:adjustViewBounds="true" />
+
+        <!-- App Name -->
+        <TextView
+            android:id="@+id/appNameText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Shrimp App"
+            android:textSize="28sp"
+            android:textStyle="bold"
+            android:textColor="#D32F2F"
+            android:gravity="center"
+            android:paddingBottom="8dp" />
+
         <!-- About -->
         <TextView
             android:id="@+id/aboutText"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="MyApp v1.0\nỨng dụng demo đăng nhập"
-            android:textSize="18sp"
+            android:text="Đăng nhập để tiếp tục"
+            android:textSize="16sp"
+            android:textColor="#666666"
             android:gravity="center"
             android:paddingBottom="32dp" />
 

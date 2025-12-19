@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="120dp"
+    android:height="120dp"
+    android:viewportWidth="120"
+    android:viewportHeight="120">
+
+    <!-- Background Circle -->
+    <path
+        android:fillColor="#D32F2F"
+        android:pathData="M60,10 A50,50 0 1,1 60,110 A50,50 0 1,1 60,10 Z"/>
+
+    <!-- Inner Circle -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M60,25 A35,35 0 1,1 60,95 A35,35 0 1,1 60,25 Z"/>
+
+    <!-- Letter "S" for Shrimp -->
+    <path
+        android:fillColor="#D32F2F"
+        android:pathData="M55,45 Q45,45 45,52 Q45,57 52,57 L68,57 Q75,57 75,64 Q75,71 68,71 L52,71 Q45,71 45,78"
+        android:strokeWidth="5"
+        android:strokeColor="#D32F2F"
+        android:strokeLineCap="round"/>
+
+    <!-- Decorative dots -->
+    <path
+        android:fillColor="#FF6F00"
+        android:pathData="M35,35 m-4,0 a4,4 0 1,1 8,0 a4,4 0 1,1 -8,0"/>
+
+    <path
+        android:fillColor="#FF6F00"
+        android:pathData="M85,35 m-4,0 a4,4 0 1,1 8,0 a4,4 0 1,1 -8,0"/>
+
+    <path
+        android:fillColor="#FF6F00"
+        android:pathData="M85,85 m-4,0 a4,4 0 1,1 8,0 a4,4 0 1,1 -8,0"/>
+
+    <path
+        android:fillColor="#FF6F00"
+        android:pathData="M35,85 m-4,0 a4,4 0 1,1 8,0 a4,4 0 1,1 -8,0"/>
+</vector>
+

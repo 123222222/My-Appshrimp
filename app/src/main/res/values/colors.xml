@@ -9,4 +9,7 @@
     <!-- Màu nền & văn bản cơ bản -->
     <color name="black">#000000</color>
     <color name="white">#FFFFFF</color>
+
+    <!-- Màu nền cho launcher icon -->
+    <color name="ic_launcher_background">#F5EDE4</color>
 </resources>

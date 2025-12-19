@@ -1,8 +1,8 @@
 package com.dung.myapplication.mainUI.profile
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -849,6 +849,7 @@ fun ProfileScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -1053,13 +1054,11 @@ fun ProfileScreen(
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Bold
                             )
-                            LazyColumn(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .heightIn(max = 200.dp),
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                items(foundDevices) { (ip, deviceId) ->
+                                foundDevices.forEach { (ip, deviceId) ->
                                     OutlinedButton(
                                         onClick = { bindDevice(ip, deviceId) },
                                         modifier = Modifier.fillMaxWidth()
@@ -1214,13 +1213,11 @@ fun ProfileScreen(
                                             }
                                         }
                                     } else {
-                                        LazyColumn(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .heightIn(max = 300.dp),
+                                        Column(
+                                            modifier = Modifier.fillMaxWidth(),
                                             verticalArrangement = Arrangement.spacedBy(8.dp)
                                         ) {
-                                            items(permittedEmails) { email ->
+                                            permittedEmails.forEach { email ->
                                                 Surface(
                                                     modifier = Modifier.fillMaxWidth(),
                                                     shape = RoundedCornerShape(12.dp),
@@ -1356,13 +1353,11 @@ fun ProfileScreen(
                                             }
                                         }
                                     } else {
-                                        LazyColumn(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .heightIn(max = 300.dp),
+                                        Column(
+                                            modifier = Modifier.fillMaxWidth(),
                                             verticalArrangement = Arrangement.spacedBy(8.dp)
                                         ) {
-                                            items(permittedPhones) { phone ->
+                                            permittedPhones.forEach { phone ->
                                                 val ADMIN_PHONE = "+84987648717"  // Your admin phone
                                                 Surface(
                                                     modifier = Modifier.fillMaxWidth(),
