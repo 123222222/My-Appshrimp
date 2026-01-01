@@ -41,15 +41,25 @@ print("Initializing camera...")
 camera = None
 camera_lock = threading.Lock()
 
-for i in range(30):
-    test_cam = cv2.VideoCapture(i, cv2.CAP_V4L2)
-    if test_cam.isOpened():
-        ret, frame = test_cam.read()
-        if ret:
-            print(f"✅ Camera found at /dev/video{i}")
-            camera = test_cam
-            break
-        test_cam.release()
+# Try camera index 0 first (most common), then 1-3, then scan further if needed
+for i in [0, 1, 2, 3] + list(range(4, 15)):
+    try:
+        test_cam = cv2.VideoCapture(i, cv2.CAP_V4L2)
+        if test_cam.isOpened():
+            # Set MJPEG format for better compatibility
+            test_cam.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M','J','P','G'))
+            test_cam.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            test_cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            test_cam.set(cv2.CAP_PROP_FPS, 30)
+
+            ret, frame = test_cam.read()
+            if ret and frame is not None:
+                print(f"✅ Camera found at /dev/video{i}")
+                camera = test_cam
+                break
+            test_cam.release()
+    except Exception as e:
+        pass  # Skip indices that cause errors
 
 if camera is None:
     print("⚠️  Warning: No camera found! Camera streaming will not work.")
@@ -64,7 +74,7 @@ else:
     print("✅ Camera initialized successfully!")
 
 # ==================== AI MODEL SETUP ====================
-MODEL_PATH = os.getenv('YOLO_MODEL_PATH', 'models/best-fp16(1).tflite')
+MODEL_PATH = os.getenv('YOLO_MODEL_PATH', 'models/model.tflite')
 print(f"\nLoading TFLite model from {MODEL_PATH}...")
 
 try:
@@ -87,13 +97,13 @@ if Interpreter and os.path.exists(MODEL_PATH):
     input_shape = input_details[0]['shape']
     INPUT_HEIGHT = input_shape[1]
     INPUT_WIDTH = input_shape[2]
-    print(f"✅ TFLite model loaded successfully!")
-    print(f"   Input shape: {input_shape}")
+    #print(f"✅ TFLite model loaded successfully!")
+    #print(f"   Input shape: {input_shape}")
 else:
     print("⚠️  Warning: Model not loaded!")
     interpreter = None
-    INPUT_HEIGHT = 320
-    INPUT_WIDTH = 320
+    INPUT_HEIGHT = 128
+    INPUT_WIDTH = 128
 
 # ==================== CLOUDINARY SETUP ====================
 cloudinary.config(
@@ -326,11 +336,12 @@ def check_auth_status():
 
 # ==================== AI FUNCTIONS ====================
 CLASS_NAMES = ['shrimp']
+CONF_THRESHOLD = float(os.getenv('YOLO_CONF_THRESHOLD', 0.55))
 
 # Hằng số để tính toán kích thước thực tế của tôm
-# Giả định: Camera ở độ cao cố định, FOV cố định
-# Bạn có thể điều chỉnh các hằng số này dựa trên setup thực tế
-PIXEL_TO_CM_RATIO = 0.02  # 1 pixel = 0.02 cm (điều chỉnh theo setup camera của bạn)
+# Setup: Camera ở độ cao 20cm từ đáy
+# FOV (Field of View) phụ thuộc vào loại camera, ước tính khoảng 30-40cm chiều rộng ở độ cao 20cm
+PIXEL_TO_CM_RATIO = 0.05  # 1 pixel = 0.05 cm (điều chỉnh dựa trên camera ở độ cao 20cm)
 # Công thức tính khối lượng tôm: W = a * L^b (W: gram, L: cm)
 # Dựa trên nghiên cứu tôm thẻ chân trắng (Litopenaeus vannamei)
 LENGTH_WEIGHT_A = 0.0065  # Hệ số a
@@ -367,133 +378,117 @@ def calculate_shrimp_weight(length_cm):
     return round(weight_gram, 2)
 
 def preprocess_image(image_np):
-    """Tiền xử lý ảnh cho TFLite model"""
-    img = cv2.resize(image_np, (INPUT_WIDTH, INPUT_HEIGHT))
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    img = img.astype(np.float32) / 255.0
-    img = np.expand_dims(img, axis=0)
-    return img
+    """Tiền xử lý ảnh cho TFLite model, luôn về RGB 128x128 float32/uint8."""
+    if image_np is None or image_np.size == 0:
+        raise ValueError("Empty image for preprocessing")
+
+    # Chuẩn hóa channel về BGR 3 kênh trước khi đổi sang RGB
+    if image_np.ndim == 2:
+        image_np = cv2.cvtColor(image_np, cv2.COLOR_GRAY2BGR)
+    elif image_np.shape[2] == 4:
+        image_np = cv2.cvtColor(image_np, cv2.COLOR_BGRA2BGR)
+
+    rgb = cv2.cvtColor(image_np, cv2.COLOR_BGR2RGB)
+    resized = cv2.resize(rgb, (INPUT_WIDTH, INPUT_HEIGHT), interpolation=cv2.INTER_LINEAR)
+
+    input_data = resized.astype(np.float32) / 255.0
+    input_data = np.expand_dims(input_data, axis=0)
+
+    # Nếu model là quantized thì convert sang uint8
+    if input_details:
+        input_dtype = input_details[0].get('dtype', np.float32)
+        if input_dtype == np.uint8:
+            input_data = np.clip(input_data * 255.0, 0, 255).astype(np.uint8)
+
+    return input_data
 
 def run_inference(image_np):
     """Chạy inference với TFLite model"""
     if interpreter is None:
-        return []
+        return None
 
     input_data = preprocess_image(image_np)
     interpreter.set_tensor(input_details[0]['index'], input_data)
     interpreter.invoke()
 
-    outputs = []
-    for output in output_details:
-        outputs.append(interpreter.get_tensor(output['index']))
+    # Lấy output chính (model YOLO v5/v8 tflite thường có 1 output [1, N, 6])
+    return interpreter.get_tensor(output_details[0]['index'])
 
-    return outputs
 
-def parse_yolo_output(outputs, original_shape, conf_threshold=0.25, iou_threshold=0.45):
-    """Parse YOLO TFLite output và apply NMS"""
+def parse_yolo_output(raw_output, original_shape, conf_threshold=0.55, iou_threshold=0.45):
+    """Parse YOLO TFLite output và apply NMS (chuẩn hóa giống script test)."""
     detections = []
-    orig_h, orig_w = original_shape[:2]
-
-    # Log để debug
-    print(f"[DEBUG] Original image shape: {orig_w}x{orig_h}")
-    print(f"[DEBUG] Model input shape: {INPUT_WIDTH}x{INPUT_HEIGHT}")
-
-    if len(outputs) == 0:
+    if raw_output is None:
         return detections
 
-    if len(outputs) == 1:
-        output = outputs[0]
+    orig_h, orig_w = original_shape[:2]
 
-        # Log output shape
-        print(f"[DEBUG] YOLO output shape: {output.shape}")
+    # Chuẩn hóa shape về (N, 6)
+    output = raw_output
+    if output.ndim == 4:
+        output = np.squeeze(output, axis=0)
+    if output.ndim == 3:
+        output = output[0]
+    if output.ndim != 2:
+        return detections
 
-        if len(output.shape) == 3:
-            output = output[0]
+    boxes = []  # x, y, w, h (pixel)
+    scores = []
+    class_ids = []
 
-            boxes = []
-            scores = []
-            class_ids = []
+    for det in output:
+        if det.shape[0] < 6:
+            continue
 
-            detection_count = 0
+        x_c, y_c, w, h, conf, cls_id = det[:6]
 
-            for detection in output:
-                if len(detection) >= 6:
-                    x, y, w, h, conf = detection[:5]
+        if conf < conf_threshold:
+            continue
 
-                    if conf < conf_threshold:
-                        continue
+        # Các giá trị x_c, y_c, w, h đã normalized (0-1)
+        x1 = int((x_c - w / 2) * orig_w)
+        y1 = int((y_c - h / 2) * orig_h)
+        x2 = int((x_c + w / 2) * orig_w)
+        y2 = int((y_c + h / 2) * orig_h)
 
-                    if len(detection) == 6:
-                        class_id = int(detection[5])
-                    else:
-                        class_scores = detection[5:]
-                        class_id = np.argmax(class_scores)
-                        conf = conf * class_scores[class_id]
+        # Clamp vào biên ảnh
+        x1 = max(0, min(orig_w - 1, x1))
+        y1 = max(0, min(orig_h - 1, y1))
+        x2 = max(0, min(orig_w - 1, x2))
+        y2 = max(0, min(orig_h - 1, y2))
 
-                    if conf < conf_threshold:
-                        continue
+        w_px = max(1, x2 - x1)
+        h_px = max(1, y2 - y1)
 
-                    # Log raw detection values
-                    if detection_count < 3:  # Only log first 3 detections
-                        print(f"[DEBUG] Detection {detection_count}: x={x}, y={y}, w={w}, h={h}, conf={conf}")
-                    detection_count += 1
+        boxes.append([x1, y1, w_px, h_px])
+        scores.append(float(conf))
+        class_ids.append(int(cls_id))
 
-                    # Check if coordinates are normalized (0-1) or in pixels
-                    # If max value > 1, likely in pixels relative to input size
-                    if max(x, y, w, h) > 1.0:
-                        # Coordinates are in pixels relative to model input size (320x320)
-                        # Need to scale to original image size
-                        scale_x = orig_w / INPUT_WIDTH
-                        scale_y = orig_h / INPUT_HEIGHT
+    if not boxes:
+        return detections
 
-                        x1 = int((x - w/2) * scale_x)
-                        y1 = int((y - h/2) * scale_y)
-                        x2 = int((x + w/2) * scale_x)
-                        y2 = int((y + h/2) * scale_y)
+    indices = cv2.dnn.NMSBoxes(boxes, scores, conf_threshold, iou_threshold)
+    if len(indices) > 0:
+        for i in indices.flatten():
+            x1, y1, w_px, h_px = boxes[i]
+            x_c = x1 + w_px / 2
+            y_c = y1 + h_px / 2
 
-                        if detection_count <= 3:
-                            print(f"[DEBUG] Pixel mode - Scaled box: ({x1},{y1}) to ({x2},{y2})")
-                    else:
-                        # Coordinates are normalized (0-1), convert to original image coordinates
-                        x1 = int((x - w/2) * orig_w)
-                        y1 = int((y - h/2) * orig_h)
-                        x2 = int((x + w/2) * orig_w)
-                        y2 = int((y + h/2) * orig_h)
+            length_cm = calculate_shrimp_length(w_px, h_px)
+            weight_gram = calculate_shrimp_weight(length_cm)
 
-                        if detection_count <= 3:
-                            print(f"[DEBUG] Normalized mode - Scaled box: ({x1},{y1}) to ({x2},{y2})")
-
-                    boxes.append([x1, y1, x2, y2])
-                    scores.append(float(conf))
-                    class_ids.append(class_id)
-
-            if len(boxes) > 0:
-                indices = cv2.dnn.NMSBoxes(boxes, scores, conf_threshold, iou_threshold)
-
-                if len(indices) > 0:
-                    for i in indices.flatten():
-                        x1, y1, x2, y2 = boxes[i]
-                        w = x2 - x1
-                        h = y2 - y1
-                        x = x1 + w/2
-                        y = y1 + h/2
-
-                        # Tính chiều dài và khối lượng tôm
-                        length_cm = calculate_shrimp_length(w, h)
-                        weight_gram = calculate_shrimp_weight(length_cm)
-
-                        detections.append({
-                            "className": CLASS_NAMES[class_ids[i]] if class_ids[i] < len(CLASS_NAMES) else f"class_{class_ids[i]}",
-                            "confidence": scores[i],
-                            "bbox": {
-                                "x": float(x),
-                                "y": float(y),
-                                "width": float(w),
-                                "height": float(h)
-                            },
-                            "length": length_cm,    # Chiều dài (cm)
-                            "weight": weight_gram   # Khối lượng (gram)
-                        })
+            detections.append({
+                "className": CLASS_NAMES[class_ids[i]] if class_ids[i] < len(CLASS_NAMES) else f"class_{class_ids[i]}",
+                "confidence": scores[i],
+                "bbox": {
+                    "x": float(x_c),
+                    "y": float(y_c),
+                    "width": float(w_px),
+                    "height": float(h_px)
+                },
+                "length": length_cm,
+                "weight": weight_gram
+            })
 
     return detections
 
@@ -879,11 +874,8 @@ def detect_shrimp():
 
         # Decode base64 image
         image_data = base64.b64decode(image_base64)
-        image = Image.open(BytesIO(image_data))
-        image_np = np.array(image)
-
-        if len(image_np.shape) == 3 and image_np.shape[2] == 3:
-            image_np = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
+        image = Image.open(BytesIO(image_data)).convert('RGB')
+        image_np = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
 
         print(f"[INFO] Image size: {image.size}")
 
@@ -895,7 +887,7 @@ def detect_shrimp():
         print(f"[INFO] Inference time: {inference_time:.3f}s")
 
         # Parse detections
-        detections = parse_yolo_output(outputs, image_np.shape)
+        detections = parse_yolo_output(outputs, image_np.shape, conf_threshold=CONF_THRESHOLD)
         print(f"[INFO] Found {len(detections)} detections")
 
         # Generate annotated image
